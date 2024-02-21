@@ -34,7 +34,8 @@ class KalmanFilter:
 
 
 def hsv2rgb(h,s,v):
-    return tuple(round(i * 255) for i in colorsys.hsv_to_rgb(h,s,v))
+    rgb = tuple(round(i * 255) for i in colorsys.hsv_to_rgb(h,s,v))
+    return tuple([rgb[2], rgb[1], rgb[0]])
 
 def load_masks(df, team1, team2):
 
@@ -122,7 +123,7 @@ def get_team_improved(img, team1_home_hsv,team1_away_hsv, team2_home_hsv, team2_
     max_value = max(results)
     #print(results)
 
-    referee_threshold = 200
+    referee_threshold = 150
 
     if max_value > referee_threshold:
         if results.index(max_value) <= 3:
@@ -130,20 +131,20 @@ def get_team_improved(img, team1_home_hsv,team1_away_hsv, team2_home_hsv, team2_
             if results.index(max_value) % 2 == 0:
                 #colorhsv = [round((x + y)/2) for x, y in zip(team1_home_hsv[0], team1_home_hsv[1])]
                 #color = colorsys.hsv_to_rgb(team1_home_hsv[0][0]/255,team1_home_hsv[0][1]/255,team1_home_hsv[0][2]/255)
-                color = hsv2rgb(team1_home_hsv[1][0] / 180, team1_home_hsv[1][1] / 255,
+                color = hsv2rgb(((team1_home_hsv[1][0] + team1_home_hsv[0][0]) / 2) / 180, team1_home_hsv[1][1] / 255,
                                             team1_home_hsv[1][2] / 255)
             else:
                 #colorhsv = [round((x + y) / 2) for x, y in zip(team1_away_hsv[0], team1_away_hsv[1])]
-                color = hsv2rgb(team1_away_hsv[1][0]/180,team1_away_hsv[1][1]/255,team1_away_hsv[1][2]/255)
+                color = hsv2rgb(( (team1_away_hsv[1][0] + team1_away_hsv[0][0]) / 2) /180,team1_away_hsv[1][1]/255,team1_away_hsv[1][2]/255)
 
         else:
             team = "Equipo Verde"
             if results.index(max_value) % 2 == 0:
                 #colorhsv = [round((x + y)/2) for x, y in zip(team2_home_hsv[0], team2_home_hsv[1])]
-                color = hsv2rgb(team2_home_hsv[1][0]/180,team2_home_hsv[1][1]/255,team2_home_hsv[1][2]/255)
+                color = hsv2rgb(((team2_home_hsv[1][0] + team2_home_hsv[0][0])/2)/180,team2_home_hsv[1][1]/255,team2_home_hsv[1][2]/255)
             else:
                 #colorhsv = [round((x + y) / 2) for x, y in zip(team2_away_hsv[0], team2_away_hsv[1])]
-                color = hsv2rgb(team2_away_hsv[1][1]/180,team2_away_hsv[1][1]/255,team2_away_hsv[1][2]/255)
+                color = hsv2rgb(((team2_away_hsv[1][0] + team2_away_hsv[0][0]) /2)/180,team2_away_hsv[1][1]/255,team2_away_hsv[1][2]/255)
     else:
         team = "Arbitro"
         color = (0,0,0)
@@ -225,6 +226,19 @@ if __name__ == '__main__':
             confidences = results[0].boxes.conf.tolist()
             #print(names)
 
+            #remove worst ball detections if more than one ball detection
+            if classes.count(0.0) > 1:
+                print("MAS DE UNA")
+                vals = [(n, x) for n, (i, x) in enumerate(zip(classes, confidences)) if i == 0.0]
+                del vals[vals.index(max(vals, key=lambda item: item[1]))]
+                for i in range(len(vals)):
+                    del classes[vals[i][0]]
+                    del confidences[vals[i][0]]
+                    del boxes[vals[i][0]]
+
+
+
+
             ball = False
             players = []
             ballPos = ()
@@ -236,9 +250,9 @@ if __name__ == '__main__':
                 name = names[int(cls)]
 
                 if name == 'Ball':
-                    print(x1 , " " , y1)
-                    print(x2 , " " , y2)
-                    print(confidence)
+                    #print(x1 , " " , y1)
+                    #print(x2 , " " , y2)
+                    #print(confidence)
                     ball = True
                     # Predict the position of the ball with kalman filter
                     if used:
