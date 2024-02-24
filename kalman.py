@@ -8,6 +8,7 @@ from kalmanfilter import KalmanFilter
 from roboflow import Roboflow
 import numpy as np
 from ultralytics import YOLO
+import scipy.stats
 
 
 possession_threshold = 30
@@ -192,7 +193,7 @@ if __name__ == '__main__':
     kf = KalmanFilter()
     pred = None
     used = False
-
+    ballPos = ()
     VideoWidth = cap.get(3)  # float `width`
     VideoHeight = cap.get(4)  # float `height`
 
@@ -228,7 +229,7 @@ if __name__ == '__main__':
 
             #remove worst ball detections if more than one ball detection
             if classes.count(0.0) > 1:
-                print("MAS DE UNA")
+                #print("MAS DE UNA")
                 vals = [(n, x) for n, (i, x) in enumerate(zip(classes, confidences)) if i == 0.0]
                 del vals[vals.index(max(vals, key=lambda item: item[1]))]
                 for i in range(len(vals)):
@@ -241,7 +242,7 @@ if __name__ == '__main__':
 
             ball = False
             players = []
-            ballPos = ()
+
             # Iterate through the results
             for box, cls, conf in zip(boxes, classes, confidences):
                 x1, y1, x2, y2 = box
@@ -253,24 +254,44 @@ if __name__ == '__main__':
                     #print(x1 , " " , y1)
                     #print(x2 , " " , y2)
                     #print(confidence)
-                    ball = True
-                    # Predict the position of the ball with kalman filter
-                    if used:
-                        kf = KalmanFilter()
-                        print("reset")
-                        used = False
+                    # YOLO is quite sure that the detected ball is, in fact, a ball
+                    if confidence >= 0.69 or pred is None:
+                        ball = True
+                        # Predict the position of the ball with kalman filter
+                        if used:
+                            kf = KalmanFilter()
+                            print("reset")
+                            used = False
 
-                    pred = kf.predict((x1+x2)/2, (y1+y2)/2)
-                    ballPos = ((x1 + x2)/2, (y1 + y2)/2)
-                    color = (255, 255, 255)
-                    nam = "Pelota"
+                        pred = kf.predict((x1+x2)/2, (y1+y2)/2)
+                        ballPos = ((x1 + x2)/2, (y1 + y2)/2)
+                        #print(ballPos)
+                        color = (255, 255, 255)
+                        nam = "Pelota"
+                    # The detected ball could not really be a ball, so we apply a normal distribution
+                    else:
+                        print(ballPos)
+                        p = scipy.stats.norm((ballPos[0],ballPos[1]), 20).pdf( ((x1 + x2)/2,(y1 + y2)/2) )
+                        pt = p[0] + p[1]
+                        if pt >= 0.18:
+                            ball = True
+                            pred = kf.predict((x1 + x2) / 2, (y1 + y2) / 2)
+                            ballPos = ((x1 + x2) / 2, (y1 + y2) / 2)
+                            color = (255, 255, 255)
+                            nam = "Pelota"
+
+
                 elif name == 'Referee':
                     color = (0, 0, 0)
                     nam = "Arbitro"
                 else:
                     # !!!   FILTRADO DE COLOR   !!!
                     # crop image to get only the player
-                    cropped_player = frame[int(y1): int(y2), int(x1): int(x2)]
+                    crop = frame[int(y1): int(y2), int(x1): int(x2)]
+                    h, w, _ = crop.shape
+                    cropped_player = crop[int(0.2*h): int(0.7*h), int(0.3*w): int(0.7*w)]
+
+                    #cropped_player = frame[int(y1): int(y2), int(x1): int(x2)]
                     #cv2.imshow("Cropped", cropped_player)
                     #nam, color = get_team(cropped_player, (red_mask_lower, red_mask_upper, green_mask_lower, green_mask_upper))
                     nam, color = get_team_improved(cropped_player,
