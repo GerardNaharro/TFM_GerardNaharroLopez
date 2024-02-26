@@ -10,7 +10,7 @@ import numpy as np
 from ultralytics import YOLO
 import scipy.stats
 
-
+metrics = False
 possession_threshold = 30
 possessions = {}
 '''# Class KalmanFilter for the easy usage of the kalman filter implemented in OpenCv
@@ -166,7 +166,7 @@ def getPossessionTeam(players, ball):
             z = i[2]
 
 
-    if minim <= possession_threshold:
+    if minim is not None and minim <= possession_threshold:
         return z
     else:
         return None
@@ -184,9 +184,11 @@ if __name__ == '__main__':
     # Load the own trained model
     model = YOLO(own_trained_location)
 
+    clip_name = '/napolesvsmadrid.mp4'
+
 
     # Define path to video file
-    video_path = clips + '\clip4.mp4'
+    video_path = clips + clip_name
 
     # Open the video file
     cap = cv2.VideoCapture(video_path)
@@ -209,6 +211,7 @@ if __name__ == '__main__':
     possessions["Equipo Rojo"] = 0
     possessions["Equipo Verde"] = 0
 
+    frameMetrics = []
     # Loop through the video frames
     while cap.isOpened():
         # Read a frame from the video
@@ -232,6 +235,9 @@ if __name__ == '__main__':
                 #print("MAS DE UNA")
                 vals = [(n, x) for n, (i, x) in enumerate(zip(classes, confidences)) if i == 0.0]
                 del vals[vals.index(max(vals, key=lambda item: item[1]))]
+
+                # Reverse the list so that we ensure that indices are always accesible
+                vals.sort(reverse = True)
                 for i in range(len(vals)):
                     del classes[vals[i][0]]
                     del confidences[vals[i][0]]
@@ -347,12 +353,32 @@ if __name__ == '__main__':
             # Display the annotated frame
             cv2.imshow("YOLOv8 Tracking", out)
 
+            if not metrics:
+                # waiting using waitKey method
+                #cv2.waitKey(0)
 
-            # waiting using waitKey method
-            cv2.waitKey(0)
-            # Break the loop if 'q' is pressed
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+                # Break the loop if 'q' is pressed
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+            else:
+                key = cv2.waitKey(0) & 0xFF
+                if key == ord("z"):
+                    print("YOLO GOOD DETECTION")
+                    frameMetrics.append("z")
+                elif key == ord("x"):
+                    print("YOLO BAD DETECTION")
+                    frameMetrics.append("x")
+                elif key == ord("c"):
+                    print("KALMAN GOOD DETECTION")
+                    frameMetrics.append("c")
+                elif key == ord("v"):
+                    print("KALMAN BAD DETECTION")
+                    frameMetrics.append("v")
+                elif key == ord("b"):
+                    print("NO DETECTION")
+                    frameMetrics.append("b")
+
+
         else:
             # Break the loop if the end of the video is reached
             break
@@ -360,3 +386,11 @@ if __name__ == '__main__':
     # Release the video capture object and close the display window
     cap.release()
     cv2.destroyAllWindows()
+
+    data = [['CLIP NAME', clip_name], ['YOLO GOOD DETECTION', frameMetrics.count("z")], ['YOLO BAD DETECTION', frameMetrics.count("x")], ['KALMAN GOOD DETECTION', frameMetrics.count("c")],
+            ['KALMAN BAD DETECTION', frameMetrics.count("v")], ['NO DETECTION', frameMetrics.count("b")]]
+    # Creates DataFrame.
+    df = pd.DataFrame(data)
+    # saving the dataframe
+    name = clip_name[2:-4] + '.csv'
+    df.to_csv(name)
