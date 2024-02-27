@@ -128,7 +128,7 @@ def get_team_improved(img, team1_home_hsv,team1_away_hsv, team2_home_hsv, team2_
 
     if max_value > referee_threshold:
         if results.index(max_value) <= 3:
-            team = "Equipo Rojo"
+            team = "Monaco"
             if results.index(max_value) % 2 == 0:
                 #colorhsv = [round((x + y)/2) for x, y in zip(team1_home_hsv[0], team1_home_hsv[1])]
                 #color = colorsys.hsv_to_rgb(team1_home_hsv[0][0]/255,team1_home_hsv[0][1]/255,team1_home_hsv[0][2]/255)
@@ -139,7 +139,7 @@ def get_team_improved(img, team1_home_hsv,team1_away_hsv, team2_home_hsv, team2_
                 color = hsv2rgb(( (team1_away_hsv[1][0] + team1_away_hsv[0][0]) / 2) /180,team1_away_hsv[1][1]/255,team1_away_hsv[1][2]/255)
 
         else:
-            team = "Equipo Verde"
+            team = "Manchester City"
             if results.index(max_value) % 2 == 0:
                 #colorhsv = [round((x + y)/2) for x, y in zip(team2_home_hsv[0], team2_home_hsv[1])]
                 color = hsv2rgb(((team2_home_hsv[1][0] + team2_home_hsv[0][0])/2)/180,team2_home_hsv[1][1]/255,team2_home_hsv[1][2]/255)
@@ -184,7 +184,7 @@ if __name__ == '__main__':
     # Load the own trained model
     model = YOLO(own_trained_location)
 
-    clip_name = '/napolesvsmadrid.mp4'
+    clip_name = '/monacovscity.mp4'
 
 
     # Define path to video file
@@ -207,9 +207,9 @@ if __name__ == '__main__':
     green_mask_upper = (91, 204, 255)
     #   TO IMPROVE
 
-    team1_home_hsv, team1_away_hsv, team2_home_hsv, team2_away_hsv, team1_gk_home_hsv, team1_gk_away_hsv, team2_gk_home_hsv, team2_gk_away_hsv = load_masks(df, "Equipo rojo", "Equipo verde")
-    possessions["Equipo Rojo"] = 0
-    possessions["Equipo Verde"] = 0
+    team1_home_hsv, team1_away_hsv, team2_home_hsv, team2_away_hsv, team1_gk_home_hsv, team1_gk_away_hsv, team2_gk_home_hsv, team2_gk_away_hsv = load_masks(df, "Monaco", "Manchester City")
+    possessions["Monaco"] = 0
+    possessions["Manchester City"] = 0
 
     frameMetrics = []
     # Loop through the video frames
@@ -346,9 +346,9 @@ if __name__ == '__main__':
 
             #out = cv2.putText(frame, "Equipo rojo" + ": " + str(100 * (possessions["Equipo rojo"] / (possessions["Equipo rojo"] + possessions["Equipo verde"]))) + "%", )
             print("Pusesió")
-            if possessions["Equipo Rojo"] != 0 or possessions["Equipo Verde"] != 0:
-                print("Equipo Rojo = " + str(100 * (possessions["Equipo Rojo"] / (possessions["Equipo Rojo"] + possessions["Equipo Verde"]))))
-                print("Equipo Verde = " + str(100 * (possessions["Equipo Verde"] / (possessions["Equipo Rojo"] + possessions["Equipo Verde"]))))
+            if possessions["Monaco"] != 0 or possessions["Manchester City"] != 0:
+                print("Monaco = " + str(100 * (possessions["Monaco"] / (possessions["Monaco"] + possessions["Manchester City"]))))
+                print("Manchester City = " + str(100 * (possessions["Manchester City"] / (possessions["Monaco"] + possessions["Manchester City"]))))
             print("------------------------------------------------------")
             # Display the annotated frame
             cv2.imshow("YOLOv8 Tracking", out)
@@ -392,5 +392,5 @@ if __name__ == '__main__':
     # Creates DataFrame.
     df = pd.DataFrame(data)
     # saving the dataframe
-    name = clip_name[2:-4] + '.csv'
+    name = clip_name[1:-4] + '.csv'
     df.to_csv(name)
