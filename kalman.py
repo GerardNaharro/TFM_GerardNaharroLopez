@@ -13,41 +13,32 @@ import scipy.stats
 metrics = False
 possession_threshold = 30
 possessions = {}
-'''# Class KalmanFilter for the easy usage of the kalman filter implemented in OpenCv
-class KalmanFilter:
-    kf = cv2.KalmanFilter(4, 2)  # 4 state variables and 2 measurements variables
-    kf.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], np.float32)  # only positions are directly observable
-    kf.transitionMatrix = np.array([[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)
-    kf.processNoiseCov = np.array([[1, 0, 0, 0],[0, 1, 0, 0],[0, 0, 1, 0],[0, 0, 0, 1]], np.float32) * 0.02
-    # The transition matrix defines how our state vectors evolve from time step t to t+1
-    # based on a simple linear motion model where objects move linearly at constant velocity.
-    # The first two rows map position estimates onto future position estimates
-    # (position must advance by current speed values), while last two rows mantain unchanged predictions
-    # about velocities.
-
-    # Predict function to make the prediction of the next position of the object
-    def predict(self, coordX, coordY):
-        measured = np.array([[np.float32(coordX)], [np.float32(coordY)]])
-        predicted = self.kf.predict()  # Computes a predicted state.
-        self.kf.correct(measured)  # Updates the predicted state from the measurement.
-        x, y = int(predicted[0]), int(predicted[1])
-        return x, y'''
 
 
 def hsv2rgb(h,s,v):
     rgb = tuple(round(i * 255) for i in colorsys.hsv_to_rgb(h,s,v))
     return tuple([rgb[2], rgb[1], rgb[0]])
 
+def get_abbr(clipname):
+    subs = 'vs'
+    ind = clipname.index(subs)
+    return clipname[1:ind],clipname[ind + 2:-4]
+
+def get_names(df, abbr1,abbr2):
+    name1 = df['Team'][df['Abbr'] == abbr1].item()
+    name2 = df['Team'][df['Abbr'] == abbr2].item()
+    return name1, name2
+
 def load_masks(df, team1, team2):
 
-    team1_home_hsv = df['Home'][df['Team']==team1].item()
-    team1_away_hsv = df['Away'][df['Team']==team1].item()
+    team1_home_hsv = df['Home'][df['Team'] == team1].item()
+    team1_away_hsv = df['Away'][df['Team'] == team1].item()
 
     team2_home_hsv = df['Home'][df['Team'] == team2].item()
     team2_away_hsv = df['Away'][df['Team'] == team2].item()
 
-    team1_gk_home_hsv = df['GK_Home'][df['Team']==team1].item()
-    team1_gk_away_hsv = df['GK_Away'][df['Team']==team1].item()
+    team1_gk_home_hsv = df['GK_Home'][df['Team'] == team1].item()
+    team1_gk_away_hsv = df['GK_Away'][df['Team'] == team1].item()
 
     team2_gk_home_hsv = df['GK_Home'][df['Team'] == team2].item()
     team2_gk_away_hsv = df['GK_Away'][df['Team'] == team2].item()
@@ -128,7 +119,7 @@ def get_team_improved(img, team1_home_hsv,team1_away_hsv, team2_home_hsv, team2_
 
     if max_value > referee_threshold:
         if results.index(max_value) <= 3:
-            team = "Monaco"
+            team = team1
             if results.index(max_value) % 2 == 0:
                 #colorhsv = [round((x + y)/2) for x, y in zip(team1_home_hsv[0], team1_home_hsv[1])]
                 #color = colorsys.hsv_to_rgb(team1_home_hsv[0][0]/255,team1_home_hsv[0][1]/255,team1_home_hsv[0][2]/255)
@@ -139,7 +130,7 @@ def get_team_improved(img, team1_home_hsv,team1_away_hsv, team2_home_hsv, team2_
                 color = hsv2rgb(( (team1_away_hsv[1][0] + team1_away_hsv[0][0]) / 2) /180,team1_away_hsv[1][1]/255,team1_away_hsv[1][2]/255)
 
         else:
-            team = "Manchester City"
+            team = team2
             if results.index(max_value) % 2 == 0:
                 #colorhsv = [round((x + y)/2) for x, y in zip(team2_home_hsv[0], team2_home_hsv[1])]
                 color = hsv2rgb(((team2_home_hsv[1][0] + team2_home_hsv[0][0])/2)/180,team2_home_hsv[1][1]/255,team2_home_hsv[1][2]/255)
@@ -177,14 +168,14 @@ if __name__ == '__main__':
     #print(list(df.columns))
     HOME = os.getcwd()
     #print(HOME)
-    clips = "D:\clips_futbol"
+    clips = "D:\clips_futbol\listos"
 
 
     own_trained_location = HOME + "/runs\detect\Segunda_prueba_larga_nuevoEntreno_S_autobatch\weights/best.pt"
     # Load the own trained model
     model = YOLO(own_trained_location)
 
-    clip_name = '/monacovscity.mp4'
+    clip_name = '/PSGvsRNS.mp4'
 
 
     # Define path to video file
@@ -199,19 +190,18 @@ if __name__ == '__main__':
     VideoWidth = cap.get(3)  # float `width`
     VideoHeight = cap.get(4)  # float `height`
 
-    #   TO IMPROVE
-    red_mask_lower = (0, 77, 75)
-    red_mask_upper = (22, 255, 255)
+    #outVideo = cv2.VideoWriter('output.avi', -1, 20.0, (640,480))
 
-    green_mask_lower = (38, 56, 155)
-    green_mask_upper = (91, 204, 255)
-    #   TO IMPROVE
+    abbr1, abbr2 = get_abbr(clip_name)
+    team1, team2 = get_names(df, abbr1, abbr2)
 
-    team1_home_hsv, team1_away_hsv, team2_home_hsv, team2_away_hsv, team1_gk_home_hsv, team1_gk_away_hsv, team2_gk_home_hsv, team2_gk_away_hsv = load_masks(df, "Monaco", "Manchester City")
-    possessions["Monaco"] = 0
-    possessions["Manchester City"] = 0
+    team1_home_hsv, team1_away_hsv, team2_home_hsv, team2_away_hsv, team1_gk_home_hsv, team1_gk_away_hsv, team2_gk_home_hsv, team2_gk_away_hsv = load_masks(df, team1, team2)
+    possessions[team1] = 0
+    possessions[team2] = 0
 
-    frameMetrics = []
+    if metrics:
+        frameMetrics = []
+
     # Loop through the video frames
     while cap.isOpened():
         # Read a frame from the video
@@ -346,12 +336,14 @@ if __name__ == '__main__':
 
             #out = cv2.putText(frame, "Equipo rojo" + ": " + str(100 * (possessions["Equipo rojo"] / (possessions["Equipo rojo"] + possessions["Equipo verde"]))) + "%", )
             print("Pusesió")
-            if possessions["Monaco"] != 0 or possessions["Manchester City"] != 0:
-                print("Monaco = " + str(100 * (possessions["Monaco"] / (possessions["Monaco"] + possessions["Manchester City"]))))
-                print("Manchester City = " + str(100 * (possessions["Manchester City"] / (possessions["Monaco"] + possessions["Manchester City"]))))
+            if possessions[team1] != 0 or possessions[team2] != 0:
+                print(team1 + " = " + str(100 * (possessions[team1] / (possessions[team1] + possessions[team2]))))
+                print(team2 + " = " + str(100 * (possessions[team2] / (possessions[team1] + possessions[team2]))))
             print("------------------------------------------------------")
             # Display the annotated frame
             cv2.imshow("YOLOv8 Tracking", out)
+
+            #outVideo.write(out)
 
             if not metrics:
                 # waiting using waitKey method
@@ -385,12 +377,14 @@ if __name__ == '__main__':
 
     # Release the video capture object and close the display window
     cap.release()
+    #outVideo.release()
     cv2.destroyAllWindows()
 
-    data = [['CLIP NAME', clip_name], ['YOLO GOOD DETECTION', frameMetrics.count("z")], ['YOLO BAD DETECTION', frameMetrics.count("x")], ['KALMAN GOOD DETECTION', frameMetrics.count("c")],
-            ['KALMAN BAD DETECTION', frameMetrics.count("v")], ['NO DETECTION', frameMetrics.count("b")]]
-    # Creates DataFrame.
-    df = pd.DataFrame(data)
-    # saving the dataframe
-    name = clip_name[1:-4] + '.csv'
-    df.to_csv(name)
+    if metrics:
+        data = [['CLIP NAME', clip_name], ['YOLO GOOD DETECTION', frameMetrics.count("z")], ['YOLO BAD DETECTION', frameMetrics.count("x")], ['KALMAN GOOD DETECTION', frameMetrics.count("c")],
+                ['KALMAN BAD DETECTION', frameMetrics.count("v")], ['NO DETECTION', frameMetrics.count("b")]]
+        # Creates DataFrame.
+        df = pd.DataFrame(data)
+        # saving the dataframe
+        name = clip_name[1:-4] + '.csv'
+        df.to_csv(name)
