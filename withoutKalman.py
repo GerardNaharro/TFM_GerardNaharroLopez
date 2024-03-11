@@ -4,7 +4,6 @@ import os
 import cv2
 import pandas as pd
 from decimal import Decimal
-from kalmanfilter import KalmanFilter
 from roboflow import Roboflow
 import numpy as np
 from ultralytics import YOLO
@@ -183,7 +182,6 @@ if __name__ == '__main__':
 
     # Open the video file
     cap = cv2.VideoCapture(video_path)
-    kf = KalmanFilter()
     pred = None
     used = False
     ballPos = ()
@@ -253,13 +251,7 @@ if __name__ == '__main__':
                     # YOLO is quite sure that the detected ball is, in fact, a ball
                     if confidence >= 0.52 or pred is None:
                         ball = True
-                        # Predict the position of the ball with kalman filter
-                        if used:
-                            kf = KalmanFilter()
-                            print("reset")
-                            used = False
 
-                        pred = kf.predict((x1+x2)/2, (y1+y2)/2)
                         ballPos = ((x1 + x2)/2, (y1 + y2)/2)
                         #print(ballPos)
                         color = (255, 255, 255)
@@ -273,7 +265,6 @@ if __name__ == '__main__':
                         print(pt)
                         if pt >= 0.032:
                             ball = True
-                            pred = kf.predict((x1 + x2) / 2, (y1 + y2) / 2)
                             ballPos = ((x1 + x2) / 2, (y1 + y2) / 2)
                             color = (255, 255, 255)
                             nam = "Pelota"
@@ -316,7 +307,7 @@ if __name__ == '__main__':
 
 
 
-            if not ball and pred is not None:
+            '''if not ball and pred is not None:
                 p = scipy.stats.norm((ballPos[0], ballPos[1]), 20).pdf((pred[0], pred[1]))
                 pt = p[0] + p[1]
                 print(pt)
@@ -325,7 +316,9 @@ if __name__ == '__main__':
                     out = cv2.circle(frame, (pred[0],pred[1]), 10, (255,255,255), 4)
 
                     pred = kf.predict(pred[0], pred[1])
-                    used = True
+                    used = True'''
+
+
 
 
             # Possession calculations

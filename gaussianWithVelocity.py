@@ -4,15 +4,16 @@ import os
 import cv2
 import pandas as pd
 from decimal import Decimal
-from kalmanfilter import KalmanFilter
 from roboflow import Roboflow
 import numpy as np
 from ultralytics import YOLO
 import scipy.stats
 
 metrics = False
-possession_threshold = 30
+possession_threshold = 35
 possessions = {}
+passes = {}
+missed_passes = {}
 
 
 def hsv2rgb(h,s,v):
@@ -24,10 +25,12 @@ def get_abbr(clipname):
     ind = clipname.index(subs)
     return clipname[1:ind],clipname[ind + 2:-4]
 
+
 def get_names(df, abbr1,abbr2):
     name1 = df['Team'][df['Abbr'] == abbr1].item()
     name2 = df['Team'][df['Abbr'] == abbr2].item()
     return name1, name2
+
 
 def load_masks(df, team1, team2):
 
@@ -47,6 +50,7 @@ def load_masks(df, team1, team2):
     return eval(team1_home_hsv), eval(team1_away_hsv), eval(team2_home_hsv), eval(team2_away_hsv), eval(team1_gk_home_hsv), eval(team1_gk_away_hsv), eval(team2_gk_home_hsv), eval(team2_gk_away_hsv)
 
 # !!!    MEJORAR FUNCION     !!!
+
 
 def get_team(img, masks):
 
@@ -71,6 +75,7 @@ def get_team(img, masks):
         team = "Rojos"
 
     return team, color
+
 
 def get_team_improved(img, team1_home_hsv,team1_away_hsv, team2_home_hsv, team2_away_hsv, team1_gk_home_hsv, team1_gk_away_hsv, team2_gk_home_hsv, team2_gk_away_hsv):
 
@@ -146,21 +151,33 @@ def get_team_improved(img, team1_home_hsv,team1_away_hsv, team2_home_hsv, team2_
 
 def getPossessionTeam(players, ball):
     minim = None
+    ind = None
     for i in players:
         left_foot_distance = np.linalg.norm(tuple(x - y for x, y in zip(ball, i[0])))
         right_foot_distance = np.linalg.norm(tuple(x - y for x, y in zip(ball, i[1])))
         if minim is None:
             minim = min(left_foot_distance, right_foot_distance)
             z = i[2]
+            ind = i
         elif min(left_foot_distance, right_foot_distance) < minim:
             minim = min(left_foot_distance, right_foot_distance)
             z = i[2]
+            ind = i
 
-
-    if minim is not None and minim <= possession_threshold:
-        return z
+    print(str(minim))
+    if (minim is not None and minim <= possession_threshold) or (minim is not None and ind[0][0] < ball[0] < ind[1][0]):
+        return z, minim
     else:
-        return None
+        return None, None
+
+
+def update_XYpos(xPos, yPos, xelem, yelem):
+    xPos.append(xelem)
+    yPos.append(yelem)
+
+    if len(xPos) > 5:
+        xPos.pop(0)
+        yPos.pop(0)
 
 
 if __name__ == '__main__':
@@ -183,10 +200,10 @@ if __name__ == '__main__':
 
     # Open the video file
     cap = cv2.VideoCapture(video_path)
-    kf = KalmanFilter()
-    pred = None
-    used = False
+    previousBallPos = None
     ballPos = ()
+    teamInPossession = None
+    lastTeamInPossession = None
     VideoWidth = cap.get(3)  # float `width`
     VideoHeight = cap.get(4)  # float `height`
 
@@ -198,6 +215,14 @@ if __name__ == '__main__':
     team1_home_hsv, team1_away_hsv, team2_home_hsv, team2_away_hsv, team1_gk_home_hsv, team1_gk_away_hsv, team2_gk_home_hsv, team2_gk_away_hsv = load_masks(df, team1, team2)
     possessions[team1] = 0
     possessions[team2] = 0
+    passes[team1] = 0
+    passes[team2] = 0
+    missed_passes[team1] = 0
+    missed_passes[team2] = 0
+
+    sd = 5
+    xPos = []
+    yPos = []
 
     if metrics:
         frameMetrics = []
@@ -247,34 +272,36 @@ if __name__ == '__main__':
                 name = names[int(cls)]
 
                 if name == 'Ball':
-                    #print(x1 , " " , y1)
-                    #print(x2 , " " , y2)
-                    #print(confidence)
                     # YOLO is quite sure that the detected ball is, in fact, a ball
-                    if confidence >= 0.52 or pred is None:
+                    if confidence >= 0.52 or previousBallPos is None:
                         ball = True
-                        # Predict the position of the ball with kalman filter
-                        if used:
-                            kf = KalmanFilter()
-                            print("reset")
-                            used = False
-
-                        pred = kf.predict((x1+x2)/2, (y1+y2)/2)
-                        ballPos = ((x1 + x2)/2, (y1 + y2)/2)
+                        previousBallPos = ballPos
+                        ballPos = (int((x1 + x2)/2), int((y1 + y2)/2))
+                        update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
                         #print(ballPos)
                         color = (255, 255, 255)
                         nam = "Pelota"
                     # The detected ball could not really be a ball, so we apply a normal distribution
                     else:
                         #print(ballPos)
-                        p = scipy.stats.norm((ballPos[0],ballPos[1]), 20).pdf( ((x1 + x2)/2,(y1 + y2)/2) )
+                        # dynamic calculation of standard deviation
+                        if len(xPos) == 5:
+                            sd = (np.std(xPos) + np.std(yPos)) / 2
+                            print(str(np.std(xPos)))
+                            print(str(np.std(yPos)))
+                            print("xPos: " + str(xPos))
+                            print("yPos: " + str(yPos))
+                            print("SD: " + str(sd))
+
+                        p = scipy.stats.norm((ballPos[0],ballPos[1]), sd).pdf( ((x1 + x2)/2,(y1 + y2)/2) )
                         pt = p[0] + p[1]
                         print(confidence)
                         print(pt)
-                        if pt >= 0.032:
+                        if pt >= 0.03:
                             ball = True
-                            pred = kf.predict((x1 + x2) / 2, (y1 + y2) / 2)
-                            ballPos = ((x1 + x2) / 2, (y1 + y2) / 2)
+                            previousBallPos = ballPos
+                            ballPos = (int((x1 + x2) / 2), int((y1 + y2) / 2))
+                            update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
                             color = (255, 255, 255)
                             nam = "Pelota"
                         else:
@@ -285,7 +312,6 @@ if __name__ == '__main__':
                     color = (0, 0, 0)
                     nam = "Arbitro"
                 else:
-                    # !!!   FILTRADO DE COLOR   !!!
                     # crop image to get only the player
                     crop = frame[int(y1): int(y2), int(x1): int(x2)]
                     h, w, _ = crop.shape
@@ -297,6 +323,7 @@ if __name__ == '__main__':
                     nam, color = get_team_improved(cropped_player,
                                           team1_home_hsv, team1_away_hsv, team2_home_hsv, team2_away_hsv, team1_gk_home_hsv, team1_gk_away_hsv, team2_gk_home_hsv, team2_gk_away_hsv)
 
+                    # Yolo, sometimes, makes wrong classifications, saying that a referee is a player
                     if nam != "Arbitro":
                         players.append(((x1,y2), (x2, y2), nam))
 
@@ -316,22 +343,51 @@ if __name__ == '__main__':
 
 
 
-            if not ball and pred is not None:
-                p = scipy.stats.norm((ballPos[0], ballPos[1]), 20).pdf((pred[0], pred[1]))
+            if not ball and previousBallPos is not None:
+                velocity = (ballPos[0] - previousBallPos[0], ballPos[1] - previousBallPos[1])
+                gaussPred = (ballPos[0] + velocity[0], ballPos[1] + velocity[1])
+
+                if len(xPos) == 5:
+                    sd = (np.std(xPos) + np.std(yPos)) / 2
+                    print(str(np.std(xPos)))
+                    print(str(np.std(yPos)))
+                    print("xPos: " + str(xPos))
+                    print("yPos: " + str(yPos))
+                    print("SD: " + str(sd))
+
+                p = scipy.stats.norm((ballPos[0], ballPos[1]), sd).pdf((gaussPred[0], gaussPred[1]))
                 pt = p[0] + p[1]
                 print(pt)
-                if pt >= 0.032:
-                    ballPos = (pred[0],pred[1])
-                    out = cv2.circle(frame, (pred[0],pred[1]), 10, (255,255,255), 4)
+                if pt >= 0.03:
+                    previousBallPos = ballPos
+                    ballPos = (gaussPred[0],gaussPred[1])
+                    update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
+                    out = cv2.circle(frame, (gaussPred[0],gaussPred[1]), 10, (255,255,255), 4)
 
-                    pred = kf.predict(pred[0], pred[1])
-                    used = True
 
 
-            # Possession calculations
-            teamInPossession = getPossessionTeam(players,ballPos)
+
+
+            # Possession and passes calculations
+            temp, dist = getPossessionTeam(players,ballPos)
+            print("pusasio actual: " + str(temp))
+            print("distansia actual: " + str(dist))
+
+            if temp is None and teamInPossession is not None:
+                lastTeamInPossession = teamInPossession
+                print("ara mateix no hi ha pusasió")
+
+            teamInPossession = temp
             if teamInPossession is not None:
                 possessions[teamInPossession] += 1
+                if lastTeamInPossession is not None and lastTeamInPossession == teamInPossession and dist <= 20:
+                    passes[teamInPossession] += 1
+                    lastTeamInPossession = None
+                    print("això ha estat un bon pase noi")
+                elif lastTeamInPossession is not None and lastTeamInPossession != teamInPossession and dist <= 20:
+                    missed_passes[lastTeamInPossession] += 1
+                    lastTeamInPossession = None
+                    print("aquest no es va criar a la masia, mal pase noi")
 
 
             #out = cv2.putText(frame, "Equipo rojo" + ": " + str(100 * (possessions["Equipo rojo"] / (possessions["Equipo rojo"] + possessions["Equipo verde"]))) + "%", )
@@ -340,6 +396,11 @@ if __name__ == '__main__':
                 print(team1 + " = " + str(100 * (possessions[team1] / (possessions[team1] + possessions[team2]))))
                 print(team2 + " = " + str(100 * (possessions[team2] / (possessions[team1] + possessions[team2]))))
             print("------------------------------------------------------")
+            print("ADN barça:")
+            print(team1 + " pases = " + str(passes[team1]))
+            print(team1 + " pases fallados = " + str(missed_passes[team1]))
+            print(team2 + " pases = " + str(passes[team2]))
+            print(team2 + " pases fallados = " + str(missed_passes[team2]))
             # Display the annotated frame
             cv2.imshow("YOLOv8 Tracking", out)
 
@@ -347,7 +408,7 @@ if __name__ == '__main__':
 
             if not metrics:
                 # waiting using waitKey method
-                #cv2.waitKey(0)
+                cv2.waitKey(0)
 
                 # Break the loop if 'q' is pressed
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -369,6 +430,9 @@ if __name__ == '__main__':
                 elif key == ord("b"):
                     print("NO DETECTION")
                     frameMetrics.append("b")
+
+            #print("PREVIOUS: " + str(previousBallPos))
+            #print("ACTUAL: " + str(ballPos))
 
 
         else:

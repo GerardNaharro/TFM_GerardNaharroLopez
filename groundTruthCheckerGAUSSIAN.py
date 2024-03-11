@@ -29,9 +29,7 @@ if __name__ == '__main__':
 
     # Open the video file
     cap = cv2.VideoCapture(video_path)
-    kf = KalmanFilter()
-    pred = None
-    used = False
+    previousBallPos = None
     ballPos = ()
     VideoWidth = cap.get(3)  # float `width`
     VideoHeight = cap.get(4)  # float `height`
@@ -78,17 +76,14 @@ if __name__ == '__main__':
                 name = names[int(cls)]
 
                 if name == 'Ball':
-                    print(str(confidence))
                     # YOLO is quite sure that the detected ball is, in fact, a ball
-                    if confidence >= 0.52 or pred is None:
+                    if confidence >= 0.52 or previousBallPos is None:
                         ball = True
-                        # Predict the position of the ball with kalman filter
-                        if used:
-                            kf = KalmanFilter()
-                            print("reset")
-                            used = False
+                        if len(ballPos) != 0:
+                            previousBallPos = ballPos
+                        else:
+                            previousBallPos = (int((x1 + x2) / 2), int((y1 + y2) / 2))
 
-                        pred = kf.predict(int((x1 + x2) / 2), int((y1 + y2) / 2))
                         ballPos = (int((x1 + x2) / 2), int((y1 + y2) / 2))
                         if groundTruth[frameNumber] is not None:
                             if (np.abs(ballPos[0] - groundTruth[frameNumber][0]) <= metrics_threshold) and (np.abs(ballPos[1] - groundTruth[frameNumber][1]) <= metrics_threshold):
@@ -114,7 +109,7 @@ if __name__ == '__main__':
                         print(pt)
                         if pt >= 0.032:
                             ball = True
-                            pred = kf.predict((x1 + x2) / 2, (y1 + y2) / 2)
+                            previousBallPos = ballPos
                             ballPos = (int((x1 + x2) / 2), int((y1 + y2) / 2))
                             if groundTruth[frameNumber] is not None:
                                 if (np.abs(ballPos[0] - groundTruth[frameNumber][0]) <= metrics_threshold) and (
@@ -146,32 +141,34 @@ if __name__ == '__main__':
                                       lineType=cv2.LINE_AA)
 
 
-            if not ball and pred is not None:
-                p = scipy.stats.norm((ballPos[0], ballPos[1]), 20).pdf((pred[0], pred[1]))
+            if not ball and previousBallPos is not None:
+                velocity = (ballPos[0] - previousBallPos[0], ballPos[1] - previousBallPos[1])
+                gaussPred = (ballPos[0] + velocity[0], ballPos[1] + velocity[1])
+
+                p = scipy.stats.norm((ballPos[0], ballPos[1]), 20).pdf((gaussPred[0], gaussPred[1]))
                 pt = p[0] + p[1]
                 print(pt)
                 if pt >= 0.032:
-                    ballPos = (pred[0], pred[1])
+                    previousBallPos = ballPos
+                    ballPos = (gaussPred[0], gaussPred[1])
 
                     if groundTruth[frameNumber] is not None:
                         if (np.abs(ballPos[0] - groundTruth[frameNumber][0]) <= metrics_threshold) and (
                                 np.abs(ballPos[1] - groundTruth[frameNumber][1]) <= metrics_threshold):
-                            print("KALMAN GOOD DETECTION")
+                            print("GAUSSIAN GOOD DETECTION")
                             frameMetrics.append("c")
                             color = (0, 255, 0)
                         else:
-                            print("KALMAN BAD DETECTION")
+                            print("GAUSSIAN BAD DETECTION")
                             frameMetrics.append("v")
                             color = (0, 0, 255)
                     else:
-                        print("KALMAN BAD DETECTION")
+                        print("GAUSSIAN BAD DETECTION")
                         frameMetrics.append("v")
                         color = (0, 0, 255)
 
-                    out = cv2.circle(frame, (pred[0], pred[1]), 10, color, 4)
+                    out = cv2.circle(frame, (gaussPred[0], gaussPred[1]), 10, color, 4)
 
-                    pred = kf.predict(pred[0], pred[1])
-                    used = True
 
                 else:
                     if groundTruth[frameNumber] is not None:
@@ -183,7 +180,7 @@ if __name__ == '__main__':
                         frameMetrics.append("n")
                         out = frame
 
-            if not ball and pred is None:
+            if not ball and previousBallPos is None:
                 if groundTruth[frameNumber] is not None:
                     print("BAD NO DETECTION")
                     frameMetrics.append("b")
@@ -209,13 +206,13 @@ if __name__ == '__main__':
     # outVideo.release()
     cv2.destroyAllWindows()
 
-    print(str(frameMetrics))
+
 
     data = [['CLIP NAME', clip_name], ['YOLO GOOD DETECTION', frameMetrics.count("z")],
-                ['YOLO BAD DETECTION', frameMetrics.count("x")], ['KALMAN GOOD DETECTION', frameMetrics.count("c")],
-                ['KALMAN BAD DETECTION', frameMetrics.count("v")], ['BAD NO DETECTION', frameMetrics.count("b")], ['GOOD NO DETECTION', frameMetrics.count("n")]]
+                ['YOLO BAD DETECTION', frameMetrics.count("x")], ['GAUSSIAN GOOD DETECTION', frameMetrics.count("c")],
+                ['GAUSSIAN BAD DETECTION', frameMetrics.count("v")], ['BAD NO DETECTION', frameMetrics.count("b")], ['GOOD NO DETECTION', frameMetrics.count("n")]]
     # Creates DataFrame.
     df = pd.DataFrame(data)
     # saving the dataframe
-    name = clip_name[1:-4] + '_new' + '.csv'
+    name = clip_name[1:-4] + '_newGAUSSIAN' + '.csv'
     df.to_csv(name)
