@@ -10,10 +10,12 @@ from ultralytics import YOLO
 import scipy.stats
 
 metrics = False
-possession_threshold = 35
+possession_threshold = 40
 possessions = {}
 passes = {}
 missed_passes = {}
+field_color1 = (34,12,30)
+field_color2 = (53,218,217)
 
 
 def hsv2rgb(h,s,v):
@@ -164,8 +166,8 @@ def getPossessionTeam(players, ball):
             z = i[2]
             ind = i
 
-    print(str(minim))
-    if (minim is not None and minim <= possession_threshold) or (minim is not None and ind[0][0] < ball[0] < ind[1][0]):
+    #print(str(minim))
+    if minim is not None and ((ind[0][0] < ball[0] < ind[1][0] and (ind[0][1] - 50) < ball[1] < (ind[0][1] + 50)) or (minim <= possession_threshold)):
         return z, minim
     else:
         return None, None
@@ -179,6 +181,37 @@ def update_XYpos(xPos, yPos, xelem, yelem):
         xPos.pop(0)
         yPos.pop(0)
 
+def line_filtering(frame):
+    filtered = cv2.bitwise_and(frame, frame, mask = cv2.inRange(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV), field_color1, field_color2))
+    #cv2.imshow("line filtering", filtered)
+    edges = cv2.Canny(filtered, 25, 150)
+    #cv2.imshow("yo soy cany cany cany cany", edges)
+    kernel = np.ones((3, 3), np.uint8)
+    kernel1 = np.ones((3, 3), np.uint8)
+    img_dilation = cv2.dilate(edges, kernel, iterations=1)
+    #v2.imshow('dilatasao', img_dilation)
+    #img_dilation = cv2.erode(img_dilation, kernel1, iterations=1)
+    #cv2.imshow('erosao', img_dilation)
+    minLineLength = 250
+    maxLineGap = 50
+    frame2 = frame.copy()
+    lines = cv2.HoughLinesP(img_dilation, rho= (2* np.pi) / 3,theta= (2* np.pi) / 3, threshold=10, minLineLength=minLineLength, maxLineGap=maxLineGap)
+    supp_line = [0,0,0,0]
+    if lines is not None:
+        for line in lines:
+            #color = list(np.random.choice(range(256), size=3))
+            #color = (int(color[0]), int(color[1]), int(color[2]))
+            x1, y1, x2, y2 = line[0]
+            dist = np.abs(y1 - y2)
+            #cv2.line(frame2, (x1, y1), (x2, y2), color, 2)
+            if dist > np.abs(supp_line[1] - supp_line[3]):
+                supp_line = line[0]
+        print(supp_line)
+        x1, y1, x2, y2 = supp_line
+        cv2.line(frame, (x1, y1), (x2, y2), (255, 255, 0), 4)
+        cv2.line(frame, (x2, y2), (x2, 0), (255, 0, 255), 4)
+        cv2.line(frame, (x1, y1), (x1, 1080), (255, 0, 255), 4)
+        #cv2.imshow("soy un palo.", frame2)
 
 if __name__ == '__main__':
     df = pd.read_csv("hsv_teams.csv", header=0, sep = ';')
@@ -192,7 +225,7 @@ if __name__ == '__main__':
     # Load the own trained model
     model = YOLO(own_trained_location)
 
-    clip_name = '/LVPvsCHE.mp4'
+    clip_name = '/ASMvsMCY.mp4'
 
 
     # Define path to video file
@@ -201,11 +234,12 @@ if __name__ == '__main__':
     # Open the video file
     cap = cv2.VideoCapture(video_path)
     previousBallPos = None
-    ballPos = ()
+    ballPos = None
     teamInPossession = None
     lastTeamInPossession = None
     VideoWidth = cap.get(3)  # float `width`
     VideoHeight = cap.get(4)  # float `height`
+
 
     #outVideo = cv2.VideoWriter('output.avi', -1, 20.0, (640,480))
 
@@ -224,6 +258,9 @@ if __name__ == '__main__':
     xPos = []
     yPos = []
 
+    yoloConfidence = 0
+    yoloBox = None
+
     if metrics:
         frameMetrics = []
 
@@ -233,7 +270,8 @@ if __name__ == '__main__':
         success, frame = cap.read()
 
         if success:
-            # Run YOLOv8 tracking on the frame, NOT persisting tracks between frames
+            # Run YOLOv8 inference on the frame, NOT persisting tracks between frames
+            line_filtering(frame)
             results = model(frame)
 
 
@@ -272,41 +310,11 @@ if __name__ == '__main__':
                 name = names[int(cls)]
 
                 if name == 'Ball':
-                    # YOLO is quite sure that the detected ball is, in fact, a ball
-                    if confidence >= 0.52 or previousBallPos is None:
-                        ball = True
-                        previousBallPos = ballPos
-                        ballPos = (int((x1 + x2)/2), int((y1 + y2)/2))
-                        update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
-                        #print(ballPos)
-                        color = (255, 255, 255)
-                        nam = "Pelota"
-                    # The detected ball could not really be a ball, so we apply a normal distribution
-                    else:
-                        #print(ballPos)
-                        # dynamic calculation of standard deviation
-                        if len(xPos) == 5:
-                            sd = (np.std(xPos) + np.std(yPos)) / 2
-                            print(str(np.std(xPos)))
-                            print(str(np.std(yPos)))
-                            print("xPos: " + str(xPos))
-                            print("yPos: " + str(yPos))
-                            print("SD: " + str(sd))
-
-                        p = scipy.stats.norm((ballPos[0],ballPos[1]), sd).pdf( ((x1 + x2)/2,(y1 + y2)/2) )
-                        pt = p[0] + p[1]
-                        print(confidence)
-                        print(pt)
-                        if pt >= 0.03:
-                            ball = True
-                            previousBallPos = ballPos
-                            ballPos = (int((x1 + x2) / 2), int((y1 + y2) / 2))
-                            update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
-                            color = (255, 255, 255)
-                            nam = "Pelota"
-                        else:
-                            continue
-
+                    yoloConfidence = confidence
+                    yoloBallPos = (int((x1 + x2)/2), int((y1 + y2)/2))
+                    yoloBox = box
+                    color = (255, 255, 255)
+                    nam = "Pelota"
 
                 elif name == 'Referee':
                     color = (0, 0, 0)
@@ -340,33 +348,53 @@ if __name__ == '__main__':
                 #out = cv2.circle(frame, (int(x1), int(y2)), 5, (0, 0, 255), -1)
                 #out = cv2.circle(frame, (int(x2), int(y2)), 5, (255, 255, 0), -1)
 
-
-
-
-            if not ball and previousBallPos is not None:
-                velocity = (ballPos[0] - previousBallPos[0], ballPos[1] - previousBallPos[1])
-                gaussPred = (ballPos[0] + velocity[0], ballPos[1] + velocity[1])
+            if previousBallPos is not None:
 
                 if len(xPos) == 5:
                     sd = (np.std(xPos) + np.std(yPos)) / 2
-                    print(str(np.std(xPos)))
-                    print(str(np.std(yPos)))
-                    print("xPos: " + str(xPos))
-                    print("yPos: " + str(yPos))
-                    print("SD: " + str(sd))
+                    if sd == 0:
+                        sd = 1
 
-                p = scipy.stats.norm((ballPos[0], ballPos[1]), sd).pdf((gaussPred[0], gaussPred[1]))
+                p = scipy.stats.norm((ballPos[0], ballPos[1]), sd).pdf((yoloBallPos[0], yoloBallPos[1]))
                 pt = p[0] + p[1]
-                print(pt)
-                if pt >= 0.03:
-                    previousBallPos = ballPos
-                    ballPos = (gaussPred[0],gaussPred[1])
-                    update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
-                    out = cv2.circle(frame, (gaussPred[0],gaussPred[1]), 10, (255,255,255), 4)
+                #pt = round(Decimal(pt), 3)
+
+                velocity = (ballPos[0] - previousBallPos[0], ballPos[1] - previousBallPos[1])
+                gaussPred = (ballPos[0] + velocity[0], ballPos[1] + velocity[1])
+                previousBallPos = ballPos
+                pt = float(yoloConfidence) * pt * 22
+                probs = [yoloConfidence, pt, 0.52]
+                print(probs)
+                idx = probs.index(max(probs))
+                if idx == 2:
+                    print("velocity prediction")
+                    ballPos = (gaussPred[0], gaussPred[1])
+                    out = cv2.circle(frame, (gaussPred[0], gaussPred[1]), 10, (255, 255, 255), 4)
+                else:
+                    print("yolo or yolo gaussian")
+                    ballPos = yoloBallPos
 
 
+                update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
 
 
+                #print("probabilidad yolo = " + str(yoloConfidence))
+                #print("probabilidad gaussiana = " + str(pt))
+
+                yoloConfidence = 0
+            else:
+                previousBallPos = ballPos
+
+                if len(xPos) == 5:
+                    sd = (np.std(xPos) + np.std(yPos)) / 2
+                    if sd == 0:
+                        sd = 1
+
+                print("yolo or yolo gaussian")
+                ballPos = yoloBallPos
+                update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
+                print("probabilidad yolo = " + str(yoloConfidence))
+                yoloConfidence = 0
 
             # Possession and passes calculations
             temp, dist = getPossessionTeam(players,ballPos)
@@ -380,21 +408,32 @@ if __name__ == '__main__':
             teamInPossession = temp
             if teamInPossession is not None:
                 possessions[teamInPossession] += 1
-                if lastTeamInPossession is not None and lastTeamInPossession == teamInPossession and dist <= 20:
+                if lastTeamInPossession is not None and lastTeamInPossession == teamInPossession:
                     passes[teamInPossession] += 1
                     lastTeamInPossession = None
                     print("això ha estat un bon pase noi")
-                elif lastTeamInPossession is not None and lastTeamInPossession != teamInPossession and dist <= 20:
+                elif lastTeamInPossession is not None and lastTeamInPossession != teamInPossession:
                     missed_passes[lastTeamInPossession] += 1
                     lastTeamInPossession = None
                     print("aquest no es va criar a la masia, mal pase noi")
 
 
             #out = cv2.putText(frame, "Equipo rojo" + ": " + str(100 * (possessions["Equipo rojo"] / (possessions["Equipo rojo"] + possessions["Equipo verde"]))) + "%", )
-            print("Pusesió")
             if possessions[team1] != 0 or possessions[team2] != 0:
-                print(team1 + " = " + str(100 * (possessions[team1] / (possessions[team1] + possessions[team2]))))
-                print(team2 + " = " + str(100 * (possessions[team2] / (possessions[team1] + possessions[team2]))))
+                out = cv2.putText(frame, team1 + " = " + str(100 * (possessions[team1] / (possessions[team1] + possessions[team2]))) + "%", (60, 100), 0, 1 / 2, [0, 0, 0],
+                                  thickness=2,
+                                  lineType=cv2.LINE_AA)
+                out = cv2.putText(frame, team2 + " = " + str(100 * (possessions[team2] / (possessions[team1] + possessions[team2]))) + "%", (60, 115), 0, 1 / 2, [0, 0, 0],
+                                  thickness=2,
+                                  lineType=cv2.LINE_AA)
+                out = cv2.putText(frame,"Actual = " + str(teamInPossession), (60, 130), 0, 1 / 2,
+                                  [0, 0, 0],
+                                  thickness=2,
+                                  lineType=cv2.LINE_AA)
+            #print("Pusesió")
+            #if possessions[team1] != 0 or possessions[team2] != 0:
+                #print(team1 + " = " + str(100 * (possessions[team1] / (possessions[team1] + possessions[team2]))))
+                #print(team2 + " = " + str(100 * (possessions[team2] / (possessions[team1] + possessions[team2]))))
             print("------------------------------------------------------")
             print("ADN barça:")
             print(team1 + " pases = " + str(passes[team1]))
@@ -402,7 +441,8 @@ if __name__ == '__main__':
             print(team2 + " pases = " + str(passes[team2]))
             print(team2 + " pases fallados = " + str(missed_passes[team2]))
             # Display the annotated frame
-            cv2.imshow("YOLOv8 Tracking", out)
+            cv2.imshow("YOLOv8 detection", out)
+
 
             #outVideo.write(out)
 
