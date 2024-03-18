@@ -14,8 +14,11 @@ possession_threshold = 40
 possessions = {}
 passes = {}
 missed_passes = {}
+side_time = {}
 field_color1 = (34,12,30)
-field_color2 = (53,218,217)
+field_color2 = (90,255,255)
+middle_line = None
+area_line = None
 
 
 def hsv2rgb(h,s,v):
@@ -181,37 +184,131 @@ def update_XYpos(xPos, yPos, xelem, yelem):
         xPos.pop(0)
         yPos.pop(0)
 
-def line_filtering(frame):
-    filtered = cv2.bitwise_and(frame, frame, mask = cv2.inRange(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV), field_color1, field_color2))
-    #cv2.imshow("line filtering", filtered)
-    edges = cv2.Canny(filtered, 25, 150)
-    #cv2.imshow("yo soy cany cany cany cany", edges)
+# Function to draw the full line going through two points
+def draw_line_between_points(height, width, pt1, pt2, frame, color):
+
+    # Calculate the slope and angle of the line between the two points.
+    delta_y = pt2[1] - pt1[1]
+    delta_x = pt2[0] - pt1[0]
+
+    if delta_x == 0:
+        # Avoid division by zero, handle case of a vertical line
+        slope = np.inf
+    else:
+        slope = delta_y / delta_x
+
+    angle = np.arctan(slope)
+
+    # to calculate the coordinates of the points at the edges of the image
+    # to extend the line
+    x1 = int(pt1[0] - (pt1[1] - 0) / slope) if slope != 0 else pt1[0]
+    y1 = 0
+    x2 = int(pt2[0] + (height - pt2[1]) / slope) if slope != 0 else pt2[0]
+    y2 = height - 1
+
+    # draw
+    cv2.line(frame, (x1, y1), (x2, y2), color, thickness=3)
+
+def line_filtering(frame, temp_frame):
+    global middle_line
+    found = False
     kernel = np.ones((3, 3), np.uint8)
-    kernel1 = np.ones((3, 3), np.uint8)
+    filtered = cv2.bitwise_and(temp_frame, temp_frame,
+                               mask=cv2.inRange(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2HSV), field_color1,
+                                                field_color2))
+    edges = cv2.Canny(filtered, 25, 150)
     img_dilation = cv2.dilate(edges, kernel, iterations=1)
-    #v2.imshow('dilatasao', img_dilation)
-    #img_dilation = cv2.erode(img_dilation, kernel1, iterations=1)
-    #cv2.imshow('erosao', img_dilation)
-    minLineLength = 250
-    maxLineGap = 50
-    frame2 = frame.copy()
-    lines = cv2.HoughLinesP(img_dilation, rho= (2* np.pi) / 3,theta= (2* np.pi) / 3, threshold=10, minLineLength=minLineLength, maxLineGap=maxLineGap)
+    minLineLength = 255
+    maxLineGap = 25
+    #frame2 = frame.copy()
+    lines = cv2.HoughLinesP(img_dilation, rho=1, theta=np.pi / 180, threshold=10, minLineLength=minLineLength,
+                            maxLineGap=maxLineGap)
+    supp_line = [0, 0, 0, 0]
+    if lines is not None:
+        for line in lines:
+            #color = list(np.random.choice(range(256), size=3))
+            #color = (int(color[0]), int(color[1]), int(color[2]))
+            x1, y1, x2, y2 = line[0]
+            slope = (y2 - y1) / (x2 - x1)
+            angle = np.math.atan(slope) * 180. / np.pi
+            size = np.abs(y1 - y2)
+            if 80 <= angle <= 100 or -80 >= angle >= -100:
+                found = True
+                cv2.line(temp_frame,(x1,y1),(x2,y2), color, 3)
+                if size > np.abs(supp_line[1] - supp_line[3]):
+                    supp_line = line[0]
+
+        if found:
+            x1, y1, x2, y2 = supp_line
+            middle_line = (x1, x2)
+            #print(middle_line)
+            draw_line_between_points(1080, 1920, (x1, y1), (x2, y2), frame, (0, 255, 0))
+        else:
+            middle_line = None
+    else:
+        middle_line = None
+
+
+
+def line_filtering_2(frame, temp_frame):
+    global area_line
+    found = False
+    kernel = np.ones((3, 3), np.uint8)
+    filtered = cv2.bitwise_and(temp_frame, temp_frame, mask = cv2.inRange(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2HSV), field_color1, field_color2))
+    edges = cv2.Canny(filtered, 25, 150)
+    img_dilation = cv2.dilate(edges, kernel, iterations=1)
+    minLineLength = 235
+    maxLineGap = 25
+    lines = cv2.HoughLinesP(img_dilation, rho= 1, theta= np.pi / 180, threshold=10, minLineLength=minLineLength, maxLineGap=maxLineGap)
     supp_line = [0,0,0,0]
     if lines is not None:
         for line in lines:
             #color = list(np.random.choice(range(256), size=3))
             #color = (int(color[0]), int(color[1]), int(color[2]))
             x1, y1, x2, y2 = line[0]
-            dist = np.abs(y1 - y2)
-            #cv2.line(frame2, (x1, y1), (x2, y2), color, 2)
-            if dist > np.abs(supp_line[1] - supp_line[3]):
-                supp_line = line[0]
-        print(supp_line)
-        x1, y1, x2, y2 = supp_line
-        cv2.line(frame, (x1, y1), (x2, y2), (255, 255, 0), 4)
-        cv2.line(frame, (x2, y2), (x2, 0), (255, 0, 255), 4)
-        cv2.line(frame, (x1, y1), (x1, 1080), (255, 0, 255), 4)
-        #cv2.imshow("soy un palo.", frame2)
+            slope = (y2 - y1) / (x2 - x1)
+            angle = np.math.atan(slope) * 180. / np.pi
+            size = np.abs(y1 - y2)
+            if 20 <= angle <= 40 or -140 >= angle >= -160:
+                found = True
+                if size > np.abs(supp_line[1] - supp_line[3]):
+                    supp_line = line[0]
+                    side = 1
+            elif 140 <= angle <= 160 or -20 >= angle >= -40:
+                found = True
+                if size > np.abs(supp_line[1] - supp_line[3]):
+                    supp_line = line[0]
+                    side = 0
+
+        if found:
+            x1, y1, x2, y2 = supp_line
+            area_line = ((x1, x2), side)
+            draw_line_between_points(1080, 1920, (x1, y1), (x2, y2), frame, (255, 0, 255))
+        else:
+            area_line = None
+    else:
+        area_line = None
+
+def get_pitch_side(ballPos):
+    # If the middle line of the pitch is detected
+    if middle_line is not None:
+        if ballPos[0] < middle_line[0]:
+            print("ball is on left side of the pitch MIDDLE")
+            return 0
+        elif ballPos[0] > middle_line[1]:
+            print("ball is on right side of the pitch MIDDLE")
+            return 1
+        else:
+            return None
+    # We detect one of the areas
+    elif area_line is not None:
+        if area_line[1] == 0:
+            print("ball is on left side of the pitch AREA")
+        else:
+            print("ball is on left side of the pitch AREA")
+        return area_line[1]
+    else:
+        return None
 
 if __name__ == '__main__':
     df = pd.read_csv("hsv_teams.csv", header=0, sep = ';')
@@ -225,7 +322,7 @@ if __name__ == '__main__':
     # Load the own trained model
     model = YOLO(own_trained_location)
 
-    clip_name = '/ASMvsMCY.mp4'
+    clip_name = '/FCBvsVLL.mp4'
 
 
     # Define path to video file
@@ -235,6 +332,7 @@ if __name__ == '__main__':
     cap = cv2.VideoCapture(video_path)
     previousBallPos = None
     ballPos = None
+    yoloBallPos = None
     teamInPossession = None
     lastTeamInPossession = None
     VideoWidth = cap.get(3)  # float `width`
@@ -253,6 +351,8 @@ if __name__ == '__main__':
     passes[team2] = 0
     missed_passes[team1] = 0
     missed_passes[team2] = 0
+    side_time["left"] = 0
+    side_time["right"] = 0
 
     sd = 5
     xPos = []
@@ -271,7 +371,8 @@ if __name__ == '__main__':
 
         if success:
             # Run YOLOv8 inference on the frame, NOT persisting tracks between frames
-            line_filtering(frame)
+            # First we make a clean copy of the frame, so we don't disturb any lines or objects detection
+            copy_frame = frame.copy()
             results = model(frame)
 
 
@@ -367,11 +468,11 @@ if __name__ == '__main__':
                 print(probs)
                 idx = probs.index(max(probs))
                 if idx == 2:
-                    print("velocity prediction")
+                    #print("velocity prediction")
                     ballPos = (gaussPred[0], gaussPred[1])
                     out = cv2.circle(frame, (gaussPred[0], gaussPred[1]), 10, (255, 255, 255), 4)
                 else:
-                    print("yolo or yolo gaussian")
+                    #print("yolo or yolo gaussian")
                     ballPos = yoloBallPos
 
 
@@ -382,7 +483,7 @@ if __name__ == '__main__':
                 #print("probabilidad gaussiana = " + str(pt))
 
                 yoloConfidence = 0
-            else:
+            elif yoloBallPos is not None:  #esto antes era un else, comprobar funcionamiento (cambio de else a elif por PSGvsBVB, en el primer frame no hay pelota)
                 previousBallPos = ballPos
 
                 if len(xPos) == 5:
@@ -390,32 +491,55 @@ if __name__ == '__main__':
                     if sd == 0:
                         sd = 1
 
-                print("yolo or yolo gaussian")
+                #print("yolo or yolo gaussian")
                 ballPos = yoloBallPos
                 update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
-                print("probabilidad yolo = " + str(yoloConfidence))
+                #print("probabilidad yolo = " + str(yoloConfidence))
                 yoloConfidence = 0
 
-            # Possession and passes calculations
-            temp, dist = getPossessionTeam(players,ballPos)
-            print("pusasio actual: " + str(temp))
-            print("distansia actual: " + str(dist))
+            if ballPos is not None:
 
-            if temp is None and teamInPossession is not None:
-                lastTeamInPossession = teamInPossession
-                print("ara mateix no hi ha pusasió")
+                line_filtering(frame, copy_frame)
+                if middle_line is None:
+                    line_filtering_2(frame, copy_frame)
 
-            teamInPossession = temp
-            if teamInPossession is not None:
-                possessions[teamInPossession] += 1
-                if lastTeamInPossession is not None and lastTeamInPossession == teamInPossession:
-                    passes[teamInPossession] += 1
-                    lastTeamInPossession = None
-                    print("això ha estat un bon pase noi")
-                elif lastTeamInPossession is not None and lastTeamInPossession != teamInPossession:
-                    missed_passes[lastTeamInPossession] += 1
-                    lastTeamInPossession = None
-                    print("aquest no es va criar a la masia, mal pase noi")
+                # Side of the pitch calculation
+                side = get_pitch_side(ballPos)
+                if side is not None:
+                    if side == 0:
+                        side_time["left"] += 1
+                        out = cv2.putText(frame, "Actual = LEFT", (900, 500), 0, 1 / 2,
+                                          [255, 0, 255],
+                                          thickness=2,
+                                          lineType=cv2.LINE_AA)
+                    else:
+                        side_time["right"] += 1
+                        out = cv2.putText(frame, "Actual = RIGHT", (900, 500), 0, 1 / 2,
+                                          [255, 0, 255],
+                                          thickness=2,
+                                          lineType=cv2.LINE_AA)
+
+
+                # Possession and passes calculations
+                temp, dist = getPossessionTeam(players,ballPos)
+                #print("pusasio actual: " + str(temp))
+                #print("distansia actual: " + str(dist))
+
+                if temp is None and teamInPossession is not None:
+                    lastTeamInPossession = teamInPossession
+                    #print("ara mateix no hi ha pusasió")
+
+                teamInPossession = temp
+                if teamInPossession is not None:
+                    possessions[teamInPossession] += 1
+                    if lastTeamInPossession is not None and lastTeamInPossession == teamInPossession:
+                        passes[teamInPossession] += 1
+                        lastTeamInPossession = None
+                        #print("això ha estat un bon pase noi")
+                    elif lastTeamInPossession is not None and lastTeamInPossession != teamInPossession:
+                        missed_passes[lastTeamInPossession] += 1
+                        lastTeamInPossession = None
+                        #print("aquest no es va criar a la masia, mal pase noi")
 
 
             #out = cv2.putText(frame, "Equipo rojo" + ": " + str(100 * (possessions["Equipo rojo"] / (possessions["Equipo rojo"] + possessions["Equipo verde"]))) + "%", )
@@ -430,16 +554,31 @@ if __name__ == '__main__':
                                   [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
+
+            if side_time["left"] != 0 or side_time["right"] != 0:
+                out = cv2.putText(frame, "left = " + str(
+                    100 * (side_time["left"] / (side_time["left"] + side_time["right"]))) + "%", (60, 145), 0, 1 / 2,
+                                  [0, 0, 0],
+                                  thickness=2,
+                                  lineType=cv2.LINE_AA)
+                out = cv2.putText(frame, "right = " + str(
+                    100 * (side_time["right"] / (side_time["left"] + side_time["right"]))) + "%", (60, 160), 0, 1 / 2,
+                                  [0, 0, 0],
+                                  thickness=2,
+                                  lineType=cv2.LINE_AA)
+
+
+
             #print("Pusesió")
             #if possessions[team1] != 0 or possessions[team2] != 0:
                 #print(team1 + " = " + str(100 * (possessions[team1] / (possessions[team1] + possessions[team2]))))
                 #print(team2 + " = " + str(100 * (possessions[team2] / (possessions[team1] + possessions[team2]))))
-            print("------------------------------------------------------")
+            '''print("------------------------------------------------------")
             print("ADN barça:")
             print(team1 + " pases = " + str(passes[team1]))
             print(team1 + " pases fallados = " + str(missed_passes[team1]))
             print(team2 + " pases = " + str(passes[team2]))
-            print(team2 + " pases fallados = " + str(missed_passes[team2]))
+            print(team2 + " pases fallados = " + str(missed_passes[team2]))'''
             # Display the annotated frame
             cv2.imshow("YOLOv8 detection", out)
 
@@ -448,7 +587,7 @@ if __name__ == '__main__':
 
             if not metrics:
                 # waiting using waitKey method
-                cv2.waitKey(0)
+                #cv2.waitKey(0)
 
                 # Break the loop if 'q' is pressed
                 if cv2.waitKey(1) & 0xFF == ord("q"):
