@@ -721,7 +721,7 @@ if __name__ == '__main__':
                 cv2.polylines(frame, [points], isClosed=False, color=color, thickness=1)'''
 
                 # prueba bird eye
-                coord = transform_matrix(np.linalg.inv(refined_h), (x_center, y_center), (720, 1280), (gt_h, gt_w))
+                coord = transform_matrix(np.linalg.inv(refined_h), (x_center * (1280/1920), y_center * (720/1080)), (720, 1280), (gt_h, gt_w))
                 print(coord)
                 cv2.circle(bg_img, coord, 3, color, -1)
                 # ----
