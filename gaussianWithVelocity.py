@@ -8,6 +8,23 @@ from roboflow import Roboflow
 import numpy as np
 from ultralytics import YOLO
 import scipy.stats
+#from elements.perspective_transform import Perspective_Transform
+#from elements.assets import transform_matrix
+from pathlib import Path
+import scipy.io as sio
+from PIL import Image
+import pyflann
+from Perspective_Transformation.python_codes.util.synthetic_util import SyntheticUtil
+from Perspective_Transformation.python_codes.util.iou_util import IouUtil
+from Perspective_Transformation.python_codes.util.projective_camera import ProjectiveCamera
+from Perspective_Transformation.python_codes.deep.camera_dataset import CameraDataset
+from Perspective_Transformation.python_codes.options.test_options import TestOptions
+from Perspective_Transformation.python_codes.models.models import create_model
+from Perspective_Transformation.python_codes.deep.siamese import BranchNetwork, SiameseNetwork
+import torch
+import torchvision.transforms as transforms
+import torch.backends.cudnn as cudnn
+
 
 metrics = False
 possession_threshold = 40
@@ -207,7 +224,7 @@ def draw_line_between_points(height, width, pt1, pt2, frame, color):
     y2 = height - 1
 
     # draw
-    cv2.line(frame, (x1, y1), (x2, y2), color, thickness=3)
+    cv2.line(frame, (x1, y1), (x2, y2), color, thickness=4)
 
 def line_filtering(frame, temp_frame):
     global middle_line
@@ -217,27 +234,29 @@ def line_filtering(frame, temp_frame):
                                mask=cv2.inRange(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2HSV), field_color1,
                                                 field_color2))
     edges = cv2.Canny(filtered, 25, 150)
+    '''cv2.imshow("filtrada", filtered)
+    cv2.imshow("cany",edges)'''
     img_dilation = cv2.dilate(edges, kernel, iterations=1)
-    minLineLength = 255
+    '''cv2.imshow("dilatada", img_dilation)'''
+    minLineLength = 240
     maxLineGap = 25
-    #frame2 = frame.copy()
     lines = cv2.HoughLinesP(img_dilation, rho=1, theta=np.pi / 180, threshold=10, minLineLength=minLineLength,
                             maxLineGap=maxLineGap)
     supp_line = [0, 0, 0, 0]
     if lines is not None:
         for line in lines:
-            #color = list(np.random.choice(range(256), size=3))
-            #color = (int(color[0]), int(color[1]), int(color[2]))
+            '''color = list(np.random.choice(range(256), size=3))
+            color = (int(color[0]), int(color[1]), int(color[2]))'''
             x1, y1, x2, y2 = line[0]
             slope = (y2 - y1) / (x2 - x1)
             angle = np.math.atan(slope) * 180. / np.pi
             size = np.abs(y1 - y2)
-            if 80 <= angle <= 100 or -80 >= angle >= -100:
+            if 85 <= angle <= 95 or -85 >= angle >= -95:
                 found = True
-                cv2.line(temp_frame,(x1,y1),(x2,y2), color, 3)
+                'cv2.line(temp_frame,(x1,y1),(x2,y2), color, 2)'
                 if size > np.abs(supp_line[1] - supp_line[3]):
                     supp_line = line[0]
-
+        'cv2.imshow("palo centro", temp_frame)'
         if found:
             x1, y1, x2, y2 = supp_line
             middle_line = (x1, x2)
@@ -253,35 +272,41 @@ def line_filtering(frame, temp_frame):
 def line_filtering_2(frame, temp_frame):
     global area_line
     found = False
+    supp_angle = None
     kernel = np.ones((3, 3), np.uint8)
     filtered = cv2.bitwise_and(temp_frame, temp_frame, mask = cv2.inRange(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2HSV), field_color1, field_color2))
     edges = cv2.Canny(filtered, 25, 150)
     img_dilation = cv2.dilate(edges, kernel, iterations=1)
-    minLineLength = 235
-    maxLineGap = 25
+    minLineLength = 175
+    maxLineGap = 30
     lines = cv2.HoughLinesP(img_dilation, rho= 1, theta= np.pi / 180, threshold=10, minLineLength=minLineLength, maxLineGap=maxLineGap)
     supp_line = [0,0,0,0]
     if lines is not None:
         for line in lines:
-            #color = list(np.random.choice(range(256), size=3))
-            #color = (int(color[0]), int(color[1]), int(color[2]))
+            '''color = list(np.random.choice(range(256), size=3))
+            color = (int(color[0]), int(color[1]), int(color[2]))'''
             x1, y1, x2, y2 = line[0]
             slope = (y2 - y1) / (x2 - x1)
             angle = np.math.atan(slope) * 180. / np.pi
             size = np.abs(y1 - y2)
-            if 20 <= angle <= 40 or -140 >= angle >= -160:
+            if 20 <= angle <= 50 or -130 >= angle >= -160:
                 found = True
+                supp_angle = angle
+                'cv2.line(temp_frame,(x1,y1),(x2,y2),color)'
                 if size > np.abs(supp_line[1] - supp_line[3]):
                     supp_line = line[0]
                     side = 1
-            elif 140 <= angle <= 160 or -20 >= angle >= -40:
+            elif 130 <= angle <= 160 or -20 >= angle >= -50:
                 found = True
+                supp_angle = angle
+                'cv2.line(temp_frame, (x1, y1), (x2, y2), color)'
                 if size > np.abs(supp_line[1] - supp_line[3]):
                     supp_line = line[0]
                     side = 0
-
+        'cv2.imshow("palo areas", temp_frame)'
         if found:
             x1, y1, x2, y2 = supp_line
+            print(str(supp_angle))
             area_line = ((x1, x2), side)
             draw_line_between_points(1080, 1920, (x1, y1), (x2, y2), frame, (255, 0, 255))
         else:
@@ -293,10 +318,10 @@ def get_pitch_side(ballPos):
     # If the middle line of the pitch is detected
     if middle_line is not None:
         if ballPos[0] < middle_line[0]:
-            print("ball is on left side of the pitch MIDDLE")
+            #print("ball is on left side of the pitch MIDDLE")
             return 0
         elif ballPos[0] > middle_line[1]:
-            print("ball is on right side of the pitch MIDDLE")
+            #print("ball is on right side of the pitch MIDDLE")
             return 1
         else:
             return None
@@ -310,6 +335,125 @@ def get_pitch_side(ballPos):
     else:
         return None
 
+
+def initialize_deep_feature(deep_model_directory):
+    cuda_id = 0  # use -1 for CPU and 0 for GPU
+    # 2: load network
+    branch = BranchNetwork()
+    net = SiameseNetwork(branch)
+
+    if os.path.isfile(deep_model_directory):
+        checkpoint = torch.load(deep_model_directory, map_location=lambda storage, loc: storage)
+        net.load_state_dict(checkpoint['state_dict'])
+        print('load model file from {}.'.format(deep_model_directory))
+    else:
+        print('Error: file not found at {}'.format(deep_model_directory))
+
+        # 3: setup computation device
+    device = 'cuda'
+    if torch.cuda.is_available():
+        device = torch.device('cuda:{}'.format(cuda_id))
+        net = net.to(device)
+        cudnn.benchmark = True
+    print('computation device: {}'.format(device))
+
+    normalize = transforms.Normalize(mean=[0.0188],
+                                     std=[0.128])
+
+    data_transform = transforms.Compose(
+        [transforms.ToTensor(),
+         normalize,
+         ]
+    )
+
+    return net, data_transform, device
+
+def initialize_two_GAN(directory):
+    opt = TestOptions().parse(directory)
+    opt.nThreads = 1   # test code only supports nThreads = 1
+    opt.batchSize = 1  # test code only supports batchSize = 1
+    opt.serial_batches = True  # no shuffle
+    opt.no_flip = True  # no flip
+    opt.continue_train = False
+
+    model = create_model(opt)
+    return model
+
+
+def testing_two_GAN(image, model):
+    # test
+
+    if __name__ == '__main__':
+        image = Image.fromarray(image)
+        osize = [512, 256]
+
+        cropsize = osize
+        image = transforms.Compose(
+            [transforms.Resize(osize, Image.BICUBIC), transforms.RandomCrop(cropsize), transforms.ToTensor(),
+             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])(image)
+        image = image.unsqueeze(0)
+
+        model.set_input(image)
+        model.test()
+
+        visuals = model.get_current_visuals()
+        edge_map = visuals['fake_D']
+        seg_map = visuals['fake_C']
+        edge_map = cv2.resize(edge_map, (1280, 720), interpolation=5)
+        seg_map = cv2.resize(seg_map, (1280, 720))
+
+    return edge_map, seg_map
+
+
+def generate_deep_feature(edge_map, net, data_transform, device):
+    """
+    Extract feature from a siamese network
+    input: network and edge images
+    output: feature and camera
+    """
+    # parameters
+    batch_size = 1
+
+    # resize image
+    pivot_image = edge_map
+
+    pivot_image = cv2.resize(pivot_image, (320, 180))
+
+    pivot_image = cv2.cvtColor(pivot_image, cv2.COLOR_RGB2GRAY)
+
+    pivot_images = np.reshape(pivot_image, (1, pivot_image.shape[0], pivot_image.shape[1]))
+
+    print('Note: assume input image resolution is 180 x 320 (h x w)')
+
+    data_loader = CameraDataset(pivot_images,
+                                pivot_images,
+                                batch_size,
+                                -1,
+                                data_transform,
+                                is_train=False)
+
+    features = []
+
+    with torch.no_grad():
+        for i in range(len(data_loader)):
+            x, _ = data_loader[i]
+            x = x.to(device)
+            feat = net.feature_numpy(x)  # N x C
+            features.append(feat)
+            # append to the feature list
+
+    features = np.vstack((features))
+    return features, pivot_image
+
+def transform_matrix(matrix, p, vid_shape, gt_shape):
+    p = (p[0]*1280/vid_shape[1], p[1]*720/vid_shape[0])
+    px = (matrix[0][0]*p[0] + matrix[0][1]*p[1] + matrix[0][2]) / ((matrix[2][0]*p[0] + matrix[2][1]*p[1] + matrix[2][2]))
+    py = (matrix[1][0]*p[0] + matrix[1][1]*p[1] + matrix[1][2]) / ((matrix[2][0]*p[0] + matrix[2][1]*p[1] + matrix[2][2]))
+
+    p_after = (int(px*gt_shape[1]/115) , int(py*gt_shape[0]/74))
+
+    return p_after
+
 if __name__ == '__main__':
     df = pd.read_csv("hsv_teams.csv", header=0, sep = ';')
     #print(list(df.columns))
@@ -321,8 +465,9 @@ if __name__ == '__main__':
     own_trained_location = HOME + "/runs\detect\Segunda_prueba_larga_nuevoEntreno_S_autobatch\weights/best.pt"
     # Load the own trained model
     model = YOLO(own_trained_location)
+    #perspective_transform = Perspective_Transform()
 
-    clip_name = '/FCBvsVLL.mp4'
+    clip_name = '/LVPvsCHE.mp4'
 
 
     # Define path to video file
@@ -338,6 +483,39 @@ if __name__ == '__main__':
     VideoWidth = cap.get(3)  # float `width`
     VideoHeight = cap.get(4)  # float `height`
 
+
+
+
+    w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    #print("w: " + str(w))
+    #print("h: " + str(h))
+    # Black Image (Soccer Field)
+    bg_ratio = int(np.ceil(w / (3 * 115)))
+    #print("bg_Ratio: " + str(bg_ratio))
+    gt_img = cv2.imread('inference/black.jpg')
+    gt_img = cv2.resize(gt_img, (115 * bg_ratio, 74 * bg_ratio))
+    ## convert to 3 channels, then draw your red circle into that:
+    gt_h, gt_w, _ = gt_img.shape
+    #print("gt image shape: " + str(gt_h) + str(gt_w))
+    frame_num = 0
+
+    query_index = 0
+    current_directory = str(Path(__file__).resolve().parent) + "/Perspective_Transformation/python_codes"
+    deep_database_directory = current_directory + "/data_2/features/feature_camera_91k.mat"
+    data = sio.loadmat(deep_database_directory)
+    database_features = data['features']
+    database_cameras = data['cameras']
+    deep_model_directory = current_directory + "/deep/deep_network.pth"
+    net, data_transform, device = initialize_deep_feature(deep_model_directory)
+
+    twoGanModel = initialize_two_GAN(current_directory)
+
+
+    #warped_out = cv2.VideoWriter(current_directory + r"/warped_output.avi", cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 1,
+                                #(460, 296))
+    #retrieved_out = cv2.VideoWriter(current_directory + r"/retrieved_output.avi",
+                                   #cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 1, (1280, 720))
 
     #outVideo = cv2.VideoWriter('output.avi', -1, 20.0, (640,480))
 
@@ -368,21 +546,98 @@ if __name__ == '__main__':
     while cap.isOpened():
         # Read a frame from the video
         success, frame = cap.read()
+        bg_img = gt_img.copy()
+
+
 
         if success:
             # Run YOLOv8 inference on the frame, NOT persisting tracks between frames
             # First we make a clean copy of the frame, so we don't disturb any lines or objects detection
+            if cap.get(3) != 1280.0 or cap.get(4) != 720.0:
+                frame2 = cv2.resize(frame, (1280, 720))  # ===> for videos which resolutions are greater
+
+            edge_map, seg_map = testing_two_GAN(frame2, twoGanModel)
+            test_features, reduced_edge_map = generate_deep_feature(edge_map, net, data_transform, device)
+
+            data = sio.loadmat(current_directory + "/data_2/worldcup2014.mat")
+            model_points = data['points']
+            model_line_index = data['line_segment_index']
+
+            template_h = 74  # yard, soccer template
+            template_w = 115
+            flann = pyflann.FLANN()
+            result, _ = flann.nn(database_features, test_features[query_index], 1, algorithm="kdtree", trees=8,
+                                 checks=64)
+            retrieved_index = result[0]
+
+            retrieved_camera_data = database_cameras[retrieved_index]
+
+            u, v, fl = retrieved_camera_data[0:3]
+            rod_rot = retrieved_camera_data[3:6]
+            cc = retrieved_camera_data[6:9]
+
+            retrieved_camera = ProjectiveCamera(fl, u, v, cc, rod_rot)
+
+            retrieved_h = IouUtil.template_to_image_homography_uot(retrieved_camera, template_h, template_w)
+
+            retrieved_image = SyntheticUtil.camera_to_edge_image(retrieved_camera_data, model_points, model_line_index,
+                                                                 im_h=720, im_w=1280, line_width=2)
+
+            dist_threshold = 50
+            query_dist = SyntheticUtil.distance_transform(edge_map)
+            retrieved_dist = SyntheticUtil.distance_transform(retrieved_image)
+
+            query_dist[query_dist > dist_threshold] = dist_threshold
+            retrieved_dist[retrieved_dist > dist_threshold] = dist_threshold
+
+            h_retrieved_to_query = SyntheticUtil.find_transform(retrieved_dist, query_dist)
+
+            refined_h = h_retrieved_to_query @ retrieved_h
+
+            im_out = cv2.warpPerspective(seg_map, np.linalg.inv(refined_h), (115, 74), borderMode=cv2.BORDER_CONSTANT)
+
+            frame2 = cv2.resize(frame2, (1280, 720), interpolation=cv2.INTER_CUBIC)
+
+            model_address = current_directory + "/model.jpg"
+            model_image = cv2.imread(model_address)
+            model_image = cv2.resize(model_image, (115, 74))
+
+            new_image = cv2.addWeighted(model_image, 1, im_out, 1, 0)
+
+            new_image = cv2.resize(new_image, (460, 296), interpolation=1)
+
+            '''# Display images
+            cv2.waitKey(200)
+            cv2.imshow('frame', frame)
+            cv2.waitKey()
+            # cv.imshow('overlayed image', im_out_2)
+            # cv.waitKey()
+            cv2.imshow('Edge image of retrieved camera', retrieved_image)
+            cv2.waitKey()
+            cv2.imshow("Warped Source Image", new_image)
+            cv2.waitKey()'''
+
+
             copy_frame = frame.copy()
             results = model(frame)
 
+            '''# Output: Homography Matrix and Warped image
+            if frame_num % 5 == 0:  # Calculate the homography matrix every 5 frames
+                M, warped_image = perspective_transform.homography_matrix(copy_frame)
+                print("M")
+                print(M)
+                #print(warped_image)'''
 
+            copy_frame = copy_frame[10:-10 , 10:-10]
 
             # Extract bounding boxes, classes, names, and confidences
             boxes = results[0].boxes.xyxy.tolist()
             classes = results[0].boxes.cls.tolist()
             names = results[0].names
             confidences = results[0].boxes.conf.tolist()
-            #print(names)
+            #track_ids = results[0].boxes.id.int().tolist()
+            '''print(classes)
+            print(names)'''
 
             #remove worst ball detections if more than one ball detection
             if classes.count(0.0) > 1:
@@ -403,12 +658,24 @@ if __name__ == '__main__':
             ball = False
             players = []
 
+
             # Iterate through the results
             for box, cls, conf in zip(boxes, classes, confidences):
                 x1, y1, x2, y2 = box
                 confidence = round(Decimal(conf),3)
                 detected_class = cls
                 name = names[int(cls)]
+
+                '''track = track_history[track_id]
+                track.append((float((x1 + x2)/2), float(y2)))  # x, y center point
+                if len(track) > 30:  # retain 30 tracks for 30 frames
+                    track.pop(0)'''
+
+
+
+                x_center = (x1 + x2) / 2
+                y_center = y2
+                #print(str(x_center) + ", " + str(y_center))
 
                 if name == 'Ball':
                     yoloConfidence = confidence
@@ -448,6 +715,22 @@ if __name__ == '__main__':
                             lineType=cv2.LINE_AA)
                 #out = cv2.circle(frame, (int(x1), int(y2)), 5, (0, 0, 255), -1)
                 #out = cv2.circle(frame, (int(x2), int(y2)), 5, (255, 255, 0), -1)
+
+                '''# Draw the tracking lines
+                points = np.hstack(track).astype(np.int32).reshape((-1, 1, 2))
+                cv2.polylines(frame, [points], isClosed=False, color=color, thickness=1)'''
+
+                # prueba bird eye
+                coord = transform_matrix(np.linalg.inv(refined_h), (x_center, y_center), (720, 1280), (gt_h, gt_w))
+                print(coord)
+                cv2.circle(bg_img, coord, 3, color, -1)
+                # ----
+
+                '''coords = transform_matrix(M, (x_center, y_center), (h, w), (gt_h, gt_w))
+                print(coords)
+                out = cv2.circle(frame, coords, 8, color, -1)
+                #cv2.circle(bg_img, coords, 3, color, -1)'''
+
 
             if previousBallPos is not None:
 
@@ -500,11 +783,12 @@ if __name__ == '__main__':
             if ballPos is not None:
 
                 line_filtering(frame, copy_frame)
-                if middle_line is None:
-                    line_filtering_2(frame, copy_frame)
+                '''if middle_line is None:
+                    line_filtering_2(frame, copy_frame)'''
 
                 # Side of the pitch calculation
-                side = get_pitch_side(ballPos)
+                if middle_line is not None:
+                    side = get_pitch_side(ballPos)
                 if side is not None:
                     if side == 0:
                         side_time["left"] += 1
@@ -580,14 +864,16 @@ if __name__ == '__main__':
             print(team2 + " pases = " + str(passes[team2]))
             print(team2 + " pases fallados = " + str(missed_passes[team2]))'''
             # Display the annotated frame
-            cv2.imshow("YOLOv8 detection", out)
 
+            cv2.imshow('Bird eye', bg_img)
+            #out[out.shape[0] - bg_img.shape[0]:, out.shape[1] - bg_img.shape[1]:] = bg_img
+            cv2.imshow("YOLOv8 detection", out)
 
             #outVideo.write(out)
 
             if not metrics:
                 # waiting using waitKey method
-                #cv2.waitKey(0)
+                cv2.waitKey(0)
 
                 # Break the loop if 'q' is pressed
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -613,7 +899,7 @@ if __name__ == '__main__':
             #print("PREVIOUS: " + str(previousBallPos))
             #print("ACTUAL: " + str(ballPos))
 
-
+            frame_num += 1
         else:
             # Break the loop if the end of the video is reached
             break
