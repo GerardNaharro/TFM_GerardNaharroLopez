@@ -24,6 +24,7 @@ from Perspective_Transformation.python_codes.deep.siamese import BranchNetwork, 
 import torch
 import torchvision.transforms as transforms
 import torch.backends.cudnn as cudnn
+import threading
 
 
 metrics = False
@@ -36,6 +37,8 @@ field_color1 = (34,12,30)
 field_color2 = (90,255,255)
 middle_line = None
 area_line = None
+refined_h = None
+side = None
 
 
 def hsv2rgb(h,s,v):
@@ -445,6 +448,48 @@ def generate_deep_feature(edge_map, net, data_transform, device):
     features = np.vstack((features))
     return features, pivot_image
 
+def generate_transform_matrix(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features):
+    global  refined_h
+    edge_map, seg_map = testing_two_GAN(frame2, twoGanModel)
+    test_features, reduced_edge_map = generate_deep_feature(edge_map, net, data_transform, device)
+
+    # World Cup soccer template
+    data = sio.loadmat(current_directory + "/data_2/worldcup2014.mat")
+    model_points = data['points']
+    model_line_index = data['line_segment_index']
+
+    # Retrieve a camera using deep features
+    flann = pyflann.FLANN()
+    result, _ = flann.nn(database_features, test_features[query_index], 1, algorithm="kdtree", trees=8,
+                         checks=64)
+    retrieved_index = result[0]
+
+    # Retrieval camera: get the nearest-neighbor camera from database
+    retrieved_camera_data = database_cameras[retrieved_index]
+
+    u, v, fl = retrieved_camera_data[0:3]
+    rod_rot = retrieved_camera_data[3:6]
+    cc = retrieved_camera_data[6:9]
+
+    retrieved_camera = ProjectiveCamera(fl, u, v, cc, rod_rot)
+
+    retrieved_h = IouUtil.template_to_image_homography_uot(retrieved_camera, template_h, template_w)
+
+    retrieved_image = SyntheticUtil.camera_to_edge_image(retrieved_camera_data, model_points, model_line_index,
+                                                         im_h=720, im_w=1280, line_width=2)
+
+    # Refine camera: refine camera pose using Lucas-Kanade algorithm
+    dist_threshold = 50
+    query_dist = SyntheticUtil.distance_transform(edge_map)
+    retrieved_dist = SyntheticUtil.distance_transform(retrieved_image)
+
+    query_dist[query_dist > dist_threshold] = dist_threshold
+    retrieved_dist[retrieved_dist > dist_threshold] = dist_threshold
+
+    h_retrieved_to_query = SyntheticUtil.find_transform(retrieved_dist, query_dist)
+
+    refined_h = h_retrieved_to_query @ retrieved_h
+
 def transform_matrix(matrix, p, vid_shape, gt_shape):
     p = (p[0]*1280/vid_shape[1], p[1]*720/vid_shape[0])
     px = (matrix[0][0]*p[0] + matrix[0][1]*p[1] + matrix[0][2]) / ((matrix[2][0]*p[0] + matrix[2][1]*p[1] + matrix[2][2]))
@@ -453,6 +498,19 @@ def transform_matrix(matrix, p, vid_shape, gt_shape):
     p_after = (int(px*gt_shape[1]/115) , int(py*gt_shape[0]/74))
 
     return p_after
+
+def update_possession_threshold(height, ballYTransformed):
+    global possession_threshold
+
+    if ballYTransformed <= height // 3:
+        possession_threshold = 15
+        print("primer tercio")
+    elif height // 3 < ballYTransformed <= (height // 3) * 2:
+        possession_threshold = 30
+        print("segundo tercio")
+    else:
+        possession_threshold = 40
+        print("tercer tercio")
 
 if __name__ == '__main__':
     df = pd.read_csv("hsv_teams.csv", header=0, sep = ';')
@@ -467,7 +525,7 @@ if __name__ == '__main__':
     model = YOLO(own_trained_location)
     #perspective_transform = Perspective_Transform()
 
-    clip_name = '/LVPvsCHE.mp4'
+    clip_name = '/RMAvsATM.mp4'
 
 
     # Define path to video file
@@ -488,27 +546,27 @@ if __name__ == '__main__':
 
     w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    #print("w: " + str(w))
-    #print("h: " + str(h))
     # Black Image (Soccer Field)
     bg_ratio = int(np.ceil(w / (3 * 115)))
-    #print("bg_Ratio: " + str(bg_ratio))
     gt_img = cv2.imread('inference/black.jpg')
     gt_img = cv2.resize(gt_img, (115 * bg_ratio, 74 * bg_ratio))
-    ## convert to 3 channels, then draw your red circle into that:
     gt_h, gt_w, _ = gt_img.shape
-    #print("gt image shape: " + str(gt_h) + str(gt_w))
     frame_num = 0
 
     query_index = 0
     current_directory = str(Path(__file__).resolve().parent) + "/Perspective_Transformation/python_codes"
+    # Load data
+    # database
     deep_database_directory = current_directory + "/data_2/features/feature_camera_91k.mat"
     data = sio.loadmat(deep_database_directory)
     database_features = data['features']
     database_cameras = data['cameras']
     deep_model_directory = current_directory + "/deep/deep_network.pth"
     net, data_transform, device = initialize_deep_feature(deep_model_directory)
+    template_h = 74  # yard, soccer template
+    template_w = 115
 
+    # testing edge image from two-GAN
     twoGanModel = initialize_two_GAN(current_directory)
 
 
@@ -518,6 +576,10 @@ if __name__ == '__main__':
                                    #cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 1, (1280, 720))
 
     #outVideo = cv2.VideoWriter('output.avi', -1, 20.0, (640,480))
+
+    outVideo = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"football_clip_yoloedPRUEBAPASES.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (1920,1080))
+    outBird = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"BirdViewPRUEBAPASES.avi",
+                               cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (gt_w, gt_h))
 
     abbr1, abbr2 = get_abbr(clip_name)
     team1, team2 = get_names(df, abbr1, abbr2)
@@ -553,23 +615,28 @@ if __name__ == '__main__':
         if success:
             # Run YOLOv8 inference on the frame, NOT persisting tracks between frames
             # First we make a clean copy of the frame, so we don't disturb any lines or objects detection
+            # also, we create a smaller copy of the frame for the perspective transformation
             if cap.get(3) != 1280.0 or cap.get(4) != 720.0:
                 frame2 = cv2.resize(frame, (1280, 720))  # ===> for videos which resolutions are greater
 
-            edge_map, seg_map = testing_two_GAN(frame2, twoGanModel)
+            '''edge_map, seg_map = testing_two_GAN(frame2, twoGanModel)
             test_features, reduced_edge_map = generate_deep_feature(edge_map, net, data_transform, device)
 
+            # World Cup soccer template
             data = sio.loadmat(current_directory + "/data_2/worldcup2014.mat")
             model_points = data['points']
             model_line_index = data['line_segment_index']
 
             template_h = 74  # yard, soccer template
             template_w = 115
+
+            # Retrieve a camera using deep features
             flann = pyflann.FLANN()
             result, _ = flann.nn(database_features, test_features[query_index], 1, algorithm="kdtree", trees=8,
                                  checks=64)
             retrieved_index = result[0]
 
+            # Retrieval camera: get the nearest-neighbor camera from database
             retrieved_camera_data = database_cameras[retrieved_index]
 
             u, v, fl = retrieved_camera_data[0:3]
@@ -583,6 +650,7 @@ if __name__ == '__main__':
             retrieved_image = SyntheticUtil.camera_to_edge_image(retrieved_camera_data, model_points, model_line_index,
                                                                  im_h=720, im_w=1280, line_width=2)
 
+            # Refine camera: refine camera pose using Lucas-Kanade algorithm
             dist_threshold = 50
             query_dist = SyntheticUtil.distance_transform(edge_map)
             retrieved_dist = SyntheticUtil.distance_transform(retrieved_image)
@@ -592,19 +660,25 @@ if __name__ == '__main__':
 
             h_retrieved_to_query = SyntheticUtil.find_transform(retrieved_dist, query_dist)
 
-            refined_h = h_retrieved_to_query @ retrieved_h
+            refined_h = h_retrieved_to_query @ retrieved_h'''
 
-            im_out = cv2.warpPerspective(seg_map, np.linalg.inv(refined_h), (115, 74), borderMode=cv2.BORDER_CONSTANT)
+            if frame_num % 5 == 0:
+                thread_perspective_transform = threading.Thread(target= generate_transform_matrix, args=(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features))
+                #refined_h = generate_transform_matrix(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features)
+                thread_perspective_transform.start()
 
-            frame2 = cv2.resize(frame2, (1280, 720), interpolation=cv2.INTER_CUBIC)
+            ## Warp source image to destination based on homography
+            #im_out = cv2.warpPerspective(seg_map, np.linalg.inv(refined_h), (115, 74), borderMode=cv2.BORDER_CONSTANT)
 
-            model_address = current_directory + "/model.jpg"
-            model_image = cv2.imread(model_address)
-            model_image = cv2.resize(model_image, (115, 74))
+            #frame2 = cv2.resize(frame2, (1280, 720), interpolation=cv2.INTER_CUBIC)
 
-            new_image = cv2.addWeighted(model_image, 1, im_out, 1, 0)
+            #model_address = current_directory + "/model.jpg"
+            #model_image = cv2.imread(model_address)
+            #model_image = cv2.resize(model_image, (115, 74))
 
-            new_image = cv2.resize(new_image, (460, 296), interpolation=1)
+            #new_image = cv2.addWeighted(model_image, 1, im_out, 1, 0)
+
+            #new_image = cv2.resize(new_image, (460, 296), interpolation=1)
 
             '''# Display images
             cv2.waitKey(200)
@@ -666,13 +740,6 @@ if __name__ == '__main__':
                 detected_class = cls
                 name = names[int(cls)]
 
-                '''track = track_history[track_id]
-                track.append((float((x1 + x2)/2), float(y2)))  # x, y center point
-                if len(track) > 30:  # retain 30 tracks for 30 frames
-                    track.pop(0)'''
-
-
-
                 x_center = (x1 + x2) / 2
                 y_center = y2
                 #print(str(x_center) + ", " + str(y_center))
@@ -683,6 +750,7 @@ if __name__ == '__main__':
                     yoloBox = box
                     color = (255, 255, 255)
                     nam = "Pelota"
+
 
                 elif name == 'Referee':
                     color = (0, 0, 0)
@@ -716,20 +784,16 @@ if __name__ == '__main__':
                 #out = cv2.circle(frame, (int(x1), int(y2)), 5, (0, 0, 255), -1)
                 #out = cv2.circle(frame, (int(x2), int(y2)), 5, (255, 255, 0), -1)
 
-                '''# Draw the tracking lines
-                points = np.hstack(track).astype(np.int32).reshape((-1, 1, 2))
-                cv2.polylines(frame, [points], isClosed=False, color=color, thickness=1)'''
 
-                # prueba bird eye
-                coord = transform_matrix(np.linalg.inv(refined_h), (x_center * (1280/1920), y_center * (720/1080)), (720, 1280), (gt_h, gt_w))
-                print(coord)
-                cv2.circle(bg_img, coord, 3, color, -1)
-                # ----
-
-                '''coords = transform_matrix(M, (x_center, y_center), (h, w), (gt_h, gt_w))
-                print(coords)
-                out = cv2.circle(frame, coords, 8, color, -1)
-                #cv2.circle(bg_img, coords, 3, color, -1)'''
+                thread_perspective_transform.join()
+                if name != "Ball":
+                    # prueba bird eye
+                    coord = transform_matrix(np.linalg.inv(refined_h), (x_center * (1280/1920), y_center * (720/1080)), (720, 1280), (gt_h, gt_w))
+                    #print(coord)
+                    if color == (0,0,0):
+                        color = (107,107,107)
+                    cv2.circle(bg_img, coord, 3, color, -1)
+                    # ----
 
 
             if previousBallPos is not None:
@@ -747,18 +811,29 @@ if __name__ == '__main__':
                 gaussPred = (ballPos[0] + velocity[0], ballPos[1] + velocity[1])
                 previousBallPos = ballPos
                 pt = float(yoloConfidence) * pt * 22
-                probs = [yoloConfidence, pt, 0.52]
+                probs = [yoloConfidence, pt, 0.5]
                 print(probs)
                 idx = probs.index(max(probs))
                 if idx == 2:
                     #print("velocity prediction")
                     ballPos = (gaussPred[0], gaussPred[1])
                     out = cv2.circle(frame, (gaussPred[0], gaussPred[1]), 10, (255, 255, 255), 4)
+
+                    coord = transform_matrix(np.linalg.inv(refined_h),
+                                             (gaussPred[0] * (1280 / 1920), gaussPred[1] * (720 / 1080)), (720, 1280),
+                                             (gt_h, gt_w))
+                    # print(coord)
+                    cv2.circle(bg_img, coord, 3, (255, 255, 255), -1)
+
                 else:
                     #print("yolo or yolo gaussian")
                     ballPos = yoloBallPos
+                    coord = transform_matrix(np.linalg.inv(refined_h),
+                                             (ballPos[0] * (1280 / 1920), ballPos[1] * (720 / 1080)), (720, 1280),
+                                             (gt_h, gt_w))
+                    cv2.circle(bg_img, coord, 3, color, -1)
 
-
+                update_possession_threshold(gt_h, coord[1])
                 update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
 
 
@@ -776,6 +851,11 @@ if __name__ == '__main__':
 
                 #print("yolo or yolo gaussian")
                 ballPos = yoloBallPos
+                coord = transform_matrix(np.linalg.inv(refined_h),
+                                         (ballPos[0] * (1280 / 1920), ballPos[1] * (720 / 1080)), (720, 1280),
+                                         (gt_h, gt_w))
+                cv2.circle(bg_img, coord, 3, color, -1)
+                update_possession_threshold(gt_h, ballPos[1])
                 update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
                 #print("probabilidad yolo = " + str(yoloConfidence))
                 yoloConfidence = 0
@@ -783,12 +863,11 @@ if __name__ == '__main__':
             if ballPos is not None:
 
                 line_filtering(frame, copy_frame)
-                '''if middle_line is None:
-                    line_filtering_2(frame, copy_frame)'''
 
                 # Side of the pitch calculation
                 if middle_line is not None:
                     side = get_pitch_side(ballPos)
+
                 if side is not None:
                     if side == 0:
                         side_time["left"] += 1
@@ -828,29 +907,60 @@ if __name__ == '__main__':
 
             #out = cv2.putText(frame, "Equipo rojo" + ": " + str(100 * (possessions["Equipo rojo"] / (possessions["Equipo rojo"] + possessions["Equipo verde"]))) + "%", )
             if possessions[team1] != 0 or possessions[team2] != 0:
-                out = cv2.putText(frame, team1 + " = " + str(100 * (possessions[team1] / (possessions[team1] + possessions[team2]))) + "%", (60, 100), 0, 1 / 2, [0, 0, 0],
+                out = cv2.putText(frame, team1 + " = " + str(100 * (possessions[team1] / (possessions[team1] + possessions[team2]))) + "%", (60, 100+90), 0, 1 / 2, [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
-                out = cv2.putText(frame, team2 + " = " + str(100 * (possessions[team2] / (possessions[team1] + possessions[team2]))) + "%", (60, 115), 0, 1 / 2, [0, 0, 0],
+                out = cv2.putText(frame, team2 + " = " + str(100 * (possessions[team2] / (possessions[team1] + possessions[team2]))) + "%", (60, 115+90), 0, 1 / 2, [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
-                out = cv2.putText(frame,"Actual = " + str(teamInPossession), (60, 130), 0, 1 / 2,
+                out = cv2.putText(frame,"Actual = " + str(teamInPossession), (60, 130+90), 0, 1 / 2,
                                   [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
 
             if side_time["left"] != 0 or side_time["right"] != 0:
                 out = cv2.putText(frame, "left = " + str(
-                    100 * (side_time["left"] / (side_time["left"] + side_time["right"]))) + "%", (60, 145), 0, 1 / 2,
+                    100 * (side_time["left"] / (side_time["left"] + side_time["right"]))) + "%", (60, 145+90), 0, 1 / 2,
                                   [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
                 out = cv2.putText(frame, "right = " + str(
-                    100 * (side_time["right"] / (side_time["left"] + side_time["right"]))) + "%", (60, 160), 0, 1 / 2,
+                    100 * (side_time["right"] / (side_time["left"] + side_time["right"]))) + "%", (60, 160+90), 0, 1 / 2,
                                   [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
 
+            out = cv2.putText(frame, "pases " + team1 + "= " + str(passes[team1]), (60, 175 + 90), 0, 1 / 2,
+                              [0, 0, 0],
+                              thickness=2,
+                              lineType=cv2.LINE_AA)
+
+            out = cv2.putText(frame, "pases " + team2 + "= " + str(passes[team2]), (60, 190 + 90), 0, 1 / 2,
+                              [0, 0, 0],
+                              thickness=2,
+                              lineType=cv2.LINE_AA)
+
+            out = cv2.putText(frame, "pases fallados " + team1 + "= " + str(missed_passes[team1]), (60, 205 + 90), 0, 1 / 2,
+                              [0, 0, 0],
+                              thickness=2,
+                              lineType=cv2.LINE_AA)
+
+            out = cv2.putText(frame, "pases fallados " + team2 + "= " + str(missed_passes[team2]), (60, 220 + 90), 0, 1 / 2,
+                              [0, 0, 0],
+                              thickness=2,
+                              lineType=cv2.LINE_AA)
+            if possession_threshold == 10:
+                actual_third = "primer tercio"
+            elif possession_threshold == 25:
+                actual_third = "segundo_tercio"
+            else:
+                actual_third = "tercer tercio"
+
+            out = cv2.putText(frame, actual_third, (60, 235 + 90), 0,
+                              1 / 2,
+                              [255, 0, 255],
+                              thickness=2,
+                              lineType=cv2.LINE_AA)
 
 
             #print("Pusesió")
@@ -865,15 +975,20 @@ if __name__ == '__main__':
             print(team2 + " pases fallados = " + str(missed_passes[team2]))'''
             # Display the annotated frame
 
-            cv2.imshow('Bird eye', bg_img)
-            #out[out.shape[0] - bg_img.shape[0]:, out.shape[1] - bg_img.shape[1]:] = bg_img
-            cv2.imshow("YOLOv8 detection", out)
+            bg_img = cv2.line(bg_img, (0, gt_h //3), (gt_w, gt_h //3), (0,0,255), 1)
+            bg_img = cv2.line(bg_img, (0, (gt_h // 3) * 2), (gt_w, (gt_h // 3) * 2), (0, 0, 255), 1)
+            bg_img = cv2.line(bg_img, (0, (gt_h // 3) * 3), (gt_w, (gt_h // 3) * 3), (0, 0, 255), 1)
+            #cv2.imshow('Bird eye', bg_img)
+            #cv2.imshow("YOLOv8 detection", out)
 
+            outVideo.write(out)
+            outBird.write(bg_img)
+            print(frame_num)
             #outVideo.write(out)
 
             if not metrics:
                 # waiting using waitKey method
-                cv2.waitKey(0)
+                #cv2.waitKey(0)
 
                 # Break the loop if 'q' is pressed
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -906,7 +1021,8 @@ if __name__ == '__main__':
 
     # Release the video capture object and close the display window
     cap.release()
-    #outVideo.release()
+    outVideo.release()
+    outBird.release()
     cv2.destroyAllWindows()
 
     if metrics:
