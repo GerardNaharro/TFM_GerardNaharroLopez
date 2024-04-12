@@ -13,6 +13,12 @@ import scipy.stats
 from pathlib import Path
 import scipy.io as sio
 from PIL import Image
+from scipy.ndimage import label
+from skimage.measure import regionprops
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import pyflann
 from Perspective_Transformation.python_codes.util.synthetic_util import SyntheticUtil
 from Perspective_Transformation.python_codes.util.iou_util import IouUtil
@@ -38,7 +44,11 @@ field_color2 = (90,255,255)
 middle_line = None
 area_line = None
 refined_h = None
+retrieved_image = None
+seg_map = None
+edge_map = None
 side = None
+zone = None
 
 
 def hsv2rgb(h,s,v):
@@ -449,9 +459,12 @@ def generate_deep_feature(edge_map, net, data_transform, device):
     return features, pivot_image
 
 def generate_transform_matrix(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features):
-    global  refined_h
+    global  refined_h, retrieved_image, seg_map, edge_map
     edge_map, seg_map = testing_two_GAN(frame2, twoGanModel)
+    edge_map = eliminar_regiones_pequenas(edge_map, 10000)
+    #edge_map = cv2.erode(edge_map, np.ones((3, 3), np.uint8), iterations=1)
     test_features, reduced_edge_map = generate_deep_feature(edge_map, net, data_transform, device)
+
 
     # World Cup soccer template
     data = sio.loadmat(current_directory + "/data_2/worldcup2014.mat")
@@ -460,8 +473,8 @@ def generate_transform_matrix(frame2, twoGanModel, data_transform, device, curre
 
     # Retrieve a camera using deep features
     flann = pyflann.FLANN()
-    result, _ = flann.nn(database_features, test_features[query_index], 1, algorithm="kdtree", trees=8,
-                         checks=64)
+    result, _ = flann.nn(database_features, test_features[query_index], 1, algorithm="kdtree", trees=32,
+                         checks=256)
     retrieved_index = result[0]
 
     # Retrieval camera: get the nearest-neighbor camera from database
@@ -490,6 +503,7 @@ def generate_transform_matrix(frame2, twoGanModel, data_transform, device, curre
 
     refined_h = h_retrieved_to_query @ retrieved_h
 
+
 def transform_matrix(matrix, p, vid_shape, gt_shape):
     p = (p[0]*1280/vid_shape[1], p[1]*720/vid_shape[0])
     px = (matrix[0][0]*p[0] + matrix[0][1]*p[1] + matrix[0][2]) / ((matrix[2][0]*p[0] + matrix[2][1]*p[1] + matrix[2][2]))
@@ -500,17 +514,40 @@ def transform_matrix(matrix, p, vid_shape, gt_shape):
     return p_after
 
 def update_possession_threshold(height, ballYTransformed):
-    global possession_threshold
+    global possession_threshold, zone
 
-    if ballYTransformed <= height // 3:
+    if ballYTransformed <= (height // 3) - 7:
         possession_threshold = 15
         print("primer tercio")
-    elif height // 3 < ballYTransformed <= (height // 3) * 2:
+        zone = "primer tercio"
+    elif (height // 3) - 7 < ballYTransformed <= ((height // 3) * 2) + 7:
         possession_threshold = 30
         print("segundo tercio")
+        zone = "segundo tercio"
     else:
         possession_threshold = 40
         print("tercer tercio")
+        zone = "tercer tercio"
+
+def eliminar_regiones_pequenas(imagen_binaria, umbral_area = 6000):
+    # Etiquetar las regiones conectadas en la imagen
+    etiquetas, num_etiquetas = label(imagen_binaria)
+
+    # Obtener las propiedades de las regiones etiquetadas
+    propiedades = regionprops(etiquetas)
+
+    # Crear una máscara para almacenar las regiones que deseamos mantener
+    mascara = np.zeros_like(imagen_binaria)
+
+    # Filtrar las regiones cuyo tamaño es mayor o igual que el umbral especificado
+    for region in propiedades:
+        if region.area >= umbral_area:
+            mascara[etiquetas == region.label] = 1
+
+    # Aplicar la máscara a la imagen binaria original para eliminar las regiones pequeñas
+    imagen_filtrada = imagen_binaria * mascara
+
+    return imagen_filtrada
 
 if __name__ == '__main__':
     df = pd.read_csv("hsv_teams.csv", header=0, sep = ';')
@@ -577,9 +614,8 @@ if __name__ == '__main__':
 
     #outVideo = cv2.VideoWriter('output.avi', -1, 20.0, (640,480))
 
-    outVideo = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"football_clip_yoloedPRUEBAPASES.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (1920,1080))
-    outBird = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"BirdViewPRUEBAPASES.avi",
-                               cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (gt_w, gt_h))
+    outVideo = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"_yoloedALL.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (1920,1080))
+    outBird = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"_BirdViewALL.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (gt_w, gt_h))
 
     abbr1, abbr2 = get_abbr(clip_name)
     team1, team2 = get_names(df, abbr1, abbr2)
@@ -587,6 +623,9 @@ if __name__ == '__main__':
     team1_home_hsv, team1_away_hsv, team2_home_hsv, team2_away_hsv, team1_gk_home_hsv, team1_gk_away_hsv, team2_gk_home_hsv, team2_gk_away_hsv = load_masks(df, team1, team2)
     possessions[team1] = 0
     possessions[team2] = 0
+    possessions["primer tercio"] = 0
+    possessions["segundo tercio"] = 0
+    possessions["tercer tercio"] = 0
     passes[team1] = 0
     passes[team2] = 0
     missed_passes[team1] = 0
@@ -619,88 +658,17 @@ if __name__ == '__main__':
             if cap.get(3) != 1280.0 or cap.get(4) != 720.0:
                 frame2 = cv2.resize(frame, (1280, 720))  # ===> for videos which resolutions are greater
 
-            '''edge_map, seg_map = testing_two_GAN(frame2, twoGanModel)
-            test_features, reduced_edge_map = generate_deep_feature(edge_map, net, data_transform, device)
+            #frame2 = cv2.bitwise_and(frame2, frame2,mask=cv2.inRange(cv2.cvtColor(frame2, cv2.COLOR_BGR2HSV), field_color1,field_color2))
+            #frame2 = cv2.dilate(frame2, np.ones((1, 1), np.uint8), iterations=2)
 
-            # World Cup soccer template
-            data = sio.loadmat(current_directory + "/data_2/worldcup2014.mat")
-            model_points = data['points']
-            model_line_index = data['line_segment_index']
-
-            template_h = 74  # yard, soccer template
-            template_w = 115
-
-            # Retrieve a camera using deep features
-            flann = pyflann.FLANN()
-            result, _ = flann.nn(database_features, test_features[query_index], 1, algorithm="kdtree", trees=8,
-                                 checks=64)
-            retrieved_index = result[0]
-
-            # Retrieval camera: get the nearest-neighbor camera from database
-            retrieved_camera_data = database_cameras[retrieved_index]
-
-            u, v, fl = retrieved_camera_data[0:3]
-            rod_rot = retrieved_camera_data[3:6]
-            cc = retrieved_camera_data[6:9]
-
-            retrieved_camera = ProjectiveCamera(fl, u, v, cc, rod_rot)
-
-            retrieved_h = IouUtil.template_to_image_homography_uot(retrieved_camera, template_h, template_w)
-
-            retrieved_image = SyntheticUtil.camera_to_edge_image(retrieved_camera_data, model_points, model_line_index,
-                                                                 im_h=720, im_w=1280, line_width=2)
-
-            # Refine camera: refine camera pose using Lucas-Kanade algorithm
-            dist_threshold = 50
-            query_dist = SyntheticUtil.distance_transform(edge_map)
-            retrieved_dist = SyntheticUtil.distance_transform(retrieved_image)
-
-            query_dist[query_dist > dist_threshold] = dist_threshold
-            retrieved_dist[retrieved_dist > dist_threshold] = dist_threshold
-
-            h_retrieved_to_query = SyntheticUtil.find_transform(retrieved_dist, query_dist)
-
-            refined_h = h_retrieved_to_query @ retrieved_h'''
-
-            if frame_num % 5 == 0:
-                thread_perspective_transform = threading.Thread(target= generate_transform_matrix, args=(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features))
+            #if frame_num % 5 == 0:
+            thread_perspective_transform = threading.Thread(target= generate_transform_matrix, args=(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features))
                 #refined_h = generate_transform_matrix(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features)
-                thread_perspective_transform.start()
-
-            ## Warp source image to destination based on homography
-            #im_out = cv2.warpPerspective(seg_map, np.linalg.inv(refined_h), (115, 74), borderMode=cv2.BORDER_CONSTANT)
-
-            #frame2 = cv2.resize(frame2, (1280, 720), interpolation=cv2.INTER_CUBIC)
-
-            #model_address = current_directory + "/model.jpg"
-            #model_image = cv2.imread(model_address)
-            #model_image = cv2.resize(model_image, (115, 74))
-
-            #new_image = cv2.addWeighted(model_image, 1, im_out, 1, 0)
-
-            #new_image = cv2.resize(new_image, (460, 296), interpolation=1)
-
-            '''# Display images
-            cv2.waitKey(200)
-            cv2.imshow('frame', frame)
-            cv2.waitKey()
-            # cv.imshow('overlayed image', im_out_2)
-            # cv.waitKey()
-            cv2.imshow('Edge image of retrieved camera', retrieved_image)
-            cv2.waitKey()
-            cv2.imshow("Warped Source Image", new_image)
-            cv2.waitKey()'''
+            thread_perspective_transform.start()
 
 
             copy_frame = frame.copy()
             results = model(frame)
-
-            '''# Output: Homography Matrix and Warped image
-            if frame_num % 5 == 0:  # Calculate the homography matrix every 5 frames
-                M, warped_image = perspective_transform.homography_matrix(copy_frame)
-                print("M")
-                print(M)
-                #print(warped_image)'''
 
             copy_frame = copy_frame[10:-10 , 10:-10]
 
@@ -884,6 +852,7 @@ if __name__ == '__main__':
 
 
                 # Possession and passes calculations
+                possessions[zone] += 1
                 temp, dist = getPossessionTeam(players,ballPos)
                 #print("pusasio actual: " + str(temp))
                 #print("distansia actual: " + str(dist))
@@ -959,8 +928,20 @@ if __name__ == '__main__':
             out = cv2.putText(frame, actual_third, (60, 235 + 90), 0,
                               1 / 2,
                               [255, 0, 255],
-                              thickness=2,
+                              thickness=1,
                               lineType=cv2.LINE_AA)
+
+            if possessions["primer tercio"] != 0 or possessions["segundo tercio"] != 0 or possessions["tercer tercio"] != 0:
+                out = cv2.putText(frame, "primer tercio = " + str(100 * (possessions["primer tercio"] / (possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"]))) + "%", (60, 250+90), 0, 1 / 2, [0, 0, 0],
+                                  thickness=2,
+                                  lineType=cv2.LINE_AA)
+                out = cv2.putText(frame, "segundo tercio = " + str(100 * (possessions["segundo tercio"] / (possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"]))) + "%", (60, 265+90), 0, 1 / 2, [0, 0, 0],
+                                  thickness=2,
+                                  lineType=cv2.LINE_AA)
+                out = cv2.putText(frame,"tercer tercio = " + str(100 * (possessions["tercer tercio"] / (possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"]))) + "%", (60, 280+90), 0, 1 / 2,
+                                  [0, 0, 0],
+                                  thickness=2,
+                                  lineType=cv2.LINE_AA)
 
 
             #print("Pusesió")
@@ -975,11 +956,37 @@ if __name__ == '__main__':
             print(team2 + " pases fallados = " + str(missed_passes[team2]))'''
             # Display the annotated frame
 
-            bg_img = cv2.line(bg_img, (0, gt_h //3), (gt_w, gt_h //3), (0,0,255), 1)
-            bg_img = cv2.line(bg_img, (0, (gt_h // 3) * 2), (gt_w, (gt_h // 3) * 2), (0, 0, 255), 1)
-            bg_img = cv2.line(bg_img, (0, (gt_h // 3) * 3), (gt_w, (gt_h // 3) * 3), (0, 0, 255), 1)
+            bg_img = cv2.line(bg_img, (0, (gt_h //3) - 7), (gt_w, (gt_h //3) - 7), (0,0,255), 1)
+            bg_img = cv2.line(bg_img, (0, ((gt_h // 3) * 2) + 7), (gt_w, ((gt_h // 3) * 2) + 7), (0, 0, 255), 1)
             #cv2.imshow('Bird eye', bg_img)
             #cv2.imshow("YOLOv8 detection", out)
+
+            # prints debug -------------------------------
+
+            ## Warp source image to destination based on homography
+            #im_out = cv2.warpPerspective(seg_map, np.linalg.inv(refined_h), (115, 74), borderMode=cv2.BORDER_CONSTANT)
+
+            # frame2 = cv2.resize(frame2, (1280, 720), interpolation=cv2.INTER_CUBIC)
+
+            #model_address = current_directory + "/model.jpg"
+            #model_image = cv2.imread(model_address)
+            #model_image = cv2.resize(model_image, (115, 74))
+
+            #new_image = cv2.addWeighted(model_image, 1, im_out, 1, 0)
+
+            #new_image = cv2.resize(new_image, (460, 296), interpolation=1)
+
+            # Display images
+            # cv2.imshow('frame', frame)
+            # cv2.waitKey()
+            # cv.imshow('overlayed image', im_out_2)
+            # cv.waitKey()
+            #cv2.imshow('Edge image of retrieved camera', retrieved_image)
+            #cv2.imshow("NN",edge_map)
+            #cv2.imshow("Warped Source Image", new_image)
+            #cv2.waitKey(0)
+
+            # ---------------------------------
 
             outVideo.write(out)
             outBird.write(bg_img)
@@ -1023,7 +1030,7 @@ if __name__ == '__main__':
     cap.release()
     outVideo.release()
     outBird.release()
-    cv2.destroyAllWindows()
+    #cv2.destroyAllWindows()
 
     if metrics:
         data = [['CLIP NAME', clip_name], ['YOLO GOOD DETECTION', frameMetrics.count("z")], ['YOLO BAD DETECTION', frameMetrics.count("x")], ['KALMAN GOOD DETECTION', frameMetrics.count("c")],
@@ -1033,3 +1040,73 @@ if __name__ == '__main__':
         # saving the dataframe
         name = clip_name[1:-4] + '.csv'
         df.to_csv(name)
+
+    # Rutas de las imágenes de los escudos
+    ruta_escudo_team1 = "imagenes/escudos/" + team1 + ".png"
+    ruta_escudo_team2 = "imagenes/escudos/" + team2 + ".png"
+
+    # Cargar las imágenes de los escudos
+    img_escudo_team1 = Image.open(ruta_escudo_team1)
+    img_escudo_team2 = Image.open(ruta_escudo_team2)
+    gt_img = cv2.imread('inference/black.jpg')
+    gt_h, gt_w, _ = gt_img.shape
+    bg_img = gt_img.copy()
+    bg_img = cv2.line(bg_img, (0, (gt_h // 3) - 7), (gt_w, (gt_h // 3) - 7), (0, 0, 255), 12)
+    bg_img = cv2.line(bg_img, (0, ((gt_h // 3) * 2) + 7), (gt_w, ((gt_h // 3) * 2) + 7), (0, 0, 255), 12)
+
+    # Crear los subplots
+    fig, axs = plt.subplots(4, 1, figsize=(15, 5))
+
+    # Subplot 1: Escudos de los equipos con porcentajes de posesión
+    axs[0].imshow(img_escudo_team1)
+    axs[0].text(1.1, 0.5, str(round(100 * (possessions[team1] / (possessions[team1] + possessions[team2])))) + "%",
+                color='black', fontsize=24, ha='left', va='center',
+                transform=axs[0].transAxes)
+    axs[0].axis('off')
+
+    axs[1].imshow(img_escudo_team2)
+    axs[1].text(1.1, 0.5, str(round(100 * (possessions[team2] / (possessions[team1] + possessions[team2])))) + "%",
+                color='black', fontsize=24, ha='left', va='center',
+                transform=axs[1].transAxes)
+    axs[1].axis('off')
+
+    # Subplot 2: Porcentaje de posesión en diferentes zonas del campo
+    axs[2].imshow(gt_img)
+
+    # Porcentaje de posesión en el lado izquierdo
+    left_percentage = str(round(100 * (side_time["left"] / (side_time["left"] + side_time["right"]))))
+    axs[2].text(0.28, 0.5, str(left_percentage) + "%", color='white', fontsize=16, ha='center', va='center',
+                transform=axs[2].transAxes)
+
+    # Porcentaje de posesión en el lado derecho
+    right_percentage = str(round(100 * (side_time["right"] / (side_time["left"] + side_time["right"]))))
+    axs[2].text(0.72, 0.5, str(right_percentage) + "%", color='white', fontsize=16, ha='center', va='center',
+                transform=axs[2].transAxes)
+
+    axs[2].axis('off')
+
+    # Subplot 3: Porcentaje de posesión en diferentes tercios del campo
+    axs[3].imshow(bg_img)
+
+    # Porcentaje de posesión en el lado izquierdo
+    upper_percentage = str(round(100 * (possessions["primer tercio"] / (
+                possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"]))))
+    axs[3].text(0.5, 0.85, str(upper_percentage) + "%", color='white', fontsize=12, ha='center', va='center',
+                transform=axs[3].transAxes)
+
+    # Porcentaje de posesión en el lado derecho
+    middle_percentage = str(round(100 * (possessions["segundo tercio"] / (
+                possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"]))))
+    axs[3].text(0.5, 0.5, str(middle_percentage) + "%", color='white', fontsize=12, ha='center', va='center',
+                transform=axs[3].transAxes)
+
+    lower_percentage = str(round(100 * (possessions["tercer tercio"] / (
+                possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"]))))
+    axs[3].text(0.5, 0.15, str(lower_percentage) + "%", color='white', fontsize=12, ha='center', va='center',
+                transform=axs[3].transAxes)
+
+    axs[3].axis('off')
+
+    # Mostrar los subplots
+    #plt.show()
+    plt.savefig(clip_name[1:-4] + '_possessions.png', bbox_inches='tight')

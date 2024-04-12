@@ -8,7 +8,7 @@ import glob
 import pandas as pd
 
 # Directorio donde se encuentran los archivos CSV
-directorio = r'C:\Users\gerar\PycharmProjects\TFM\parameters_csv'
+directorio = r'C:\Users\gerar\PycharmProjects\TFM\parametersAcotados_csv\procesados'
 
 r'''
 # Cargar los datos desde el archivo CSV
