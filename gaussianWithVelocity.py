@@ -34,6 +34,7 @@ import threading
 
 
 metrics = False
+save = False
 possession_threshold = 40
 possessions = {}
 passes = {}
@@ -48,7 +49,11 @@ retrieved_image = None
 seg_map = None
 edge_map = None
 side = None
+side_aux = None
 zone = None
+actual_homography_matrix = None
+new_homography_matrix = None
+discarded = 0
 
 
 def hsv2rgb(h,s,v):
@@ -459,9 +464,9 @@ def generate_deep_feature(edge_map, net, data_transform, device):
     return features, pivot_image
 
 def generate_transform_matrix(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features):
-    global  refined_h, retrieved_image, seg_map, edge_map
+    global  refined_h, retrieved_image, seg_map, edge_map, new_homography_matrix
     edge_map, seg_map = testing_two_GAN(frame2, twoGanModel)
-    edge_map = eliminar_regiones_pequenas(edge_map, 10000)
+    edge_map = eliminar_regiones_pequenas(edge_map, 7500)
     #edge_map = cv2.erode(edge_map, np.ones((3, 3), np.uint8), iterations=1)
     test_features, reduced_edge_map = generate_deep_feature(edge_map, net, data_transform, device)
 
@@ -473,8 +478,8 @@ def generate_transform_matrix(frame2, twoGanModel, data_transform, device, curre
 
     # Retrieve a camera using deep features
     flann = pyflann.FLANN()
-    result, _ = flann.nn(database_features, test_features[query_index], 1, algorithm="kdtree", trees=32,
-                         checks=256)
+    result, _ = flann.nn(database_features, test_features[query_index], 1, algorithm="kdtree", trees=16,
+                         checks=128)
     retrieved_index = result[0]
 
     # Retrieval camera: get the nearest-neighbor camera from database
@@ -503,6 +508,10 @@ def generate_transform_matrix(frame2, twoGanModel, data_transform, device, curre
 
     refined_h = h_retrieved_to_query @ retrieved_h
 
+    new_homography_matrix = np.linalg.inv(refined_h)
+
+
+
 
 def transform_matrix(matrix, p, vid_shape, gt_shape):
     p = (p[0]*1280/vid_shape[1], p[1]*720/vid_shape[0])
@@ -529,6 +538,15 @@ def update_possession_threshold(height, ballYTransformed):
         print("tercer tercio")
         zone = "tercer tercio"
 
+def pitch_side_aux(width, ballXtransformed):
+    global side_aux
+
+    if ballXtransformed < (width // 2):
+        side_aux = "left"
+    else:
+        side_aux = "right"
+
+
 def eliminar_regiones_pequenas(imagen_binaria, umbral_area = 6000):
     # Etiquetar las regiones conectadas en la imagen
     etiquetas, num_etiquetas = label(imagen_binaria)
@@ -549,6 +567,35 @@ def eliminar_regiones_pequenas(imagen_binaria, umbral_area = 6000):
 
     return imagen_filtrada
 
+def homographyMatrixUpdate(frameNum):
+    global new_homography_matrix,actual_homography_matrix, discarded
+    if frameNum == 0 or discarded == 10:
+        actual_homography_matrix = new_homography_matrix
+        discarded = 0
+        #print("primer frame")
+    else:
+        # Definir los vectores de base ei (pueden ser cualquier vector)
+        ei = np.eye(3)
+
+        # Calcular las matrices de proyección pi_a y pi_b
+        pi_a = np.dot(actual_homography_matrix, ei)
+        pi_b = np.dot(new_homography_matrix, ei)
+
+        # Calcular la diferencia entre las matrices de proyección
+        dif = pi_a - pi_b
+        dif = np.linalg.norm(dif)
+        print("dif = " + str(dif))
+        if dif <= 0.2:
+            actual_homography_matrix = new_homography_matrix
+            discarded = 0
+            #print("la cambiamos")
+        else:
+            discarded += 1
+            #print("se queda la anterior")
+
+
+
+
 if __name__ == '__main__':
     df = pd.read_csv("hsv_teams.csv", header=0, sep = ';')
     #print(list(df.columns))
@@ -560,7 +607,7 @@ if __name__ == '__main__':
     own_trained_location = HOME + "/runs\detect\Segunda_prueba_larga_nuevoEntreno_S_autobatch\weights/best.pt"
     # Load the own trained model
     model = YOLO(own_trained_location)
-    #perspective_transform = Perspective_Transform()
+    #persepctive_transform = Perspective_Transform()
 
     clip_name = '/RMAvsATM.mp4'
 
@@ -585,7 +632,7 @@ if __name__ == '__main__':
     h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     # Black Image (Soccer Field)
     bg_ratio = int(np.ceil(w / (3 * 115)))
-    gt_img = cv2.imread('inference/black.jpg')
+    gt_img = cv2.imread('inference/green.jpg')
     gt_img = cv2.resize(gt_img, (115 * bg_ratio, 74 * bg_ratio))
     gt_h, gt_w, _ = gt_img.shape
     frame_num = 0
@@ -612,10 +659,9 @@ if __name__ == '__main__':
     #retrieved_out = cv2.VideoWriter(current_directory + r"/retrieved_output.avi",
                                    #cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 1, (1280, 720))
 
-    #outVideo = cv2.VideoWriter('output.avi', -1, 20.0, (640,480))
-
-    outVideo = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"_yoloedALL.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (1920,1080))
-    outBird = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"_BirdViewALL.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (gt_w, gt_h))
+    if save:
+        outVideo = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"_yoloedALL_PRUEBADESCARTES_02.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (1920,1080))
+        outBird = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"_BirdViewALL_PRUEBADESCARTES_02.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (gt_w, gt_h))
 
     abbr1, abbr2 = get_abbr(clip_name)
     team1, team2 = get_names(df, abbr1, abbr2)
@@ -661,10 +707,12 @@ if __name__ == '__main__':
             #frame2 = cv2.bitwise_and(frame2, frame2,mask=cv2.inRange(cv2.cvtColor(frame2, cv2.COLOR_BGR2HSV), field_color1,field_color2))
             #frame2 = cv2.dilate(frame2, np.ones((1, 1), np.uint8), iterations=2)
 
-            #if frame_num % 5 == 0:
-            thread_perspective_transform = threading.Thread(target= generate_transform_matrix, args=(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features))
+            #if frame_num % 3 == 0:
+                #thread_perspective_transform = threading.Thread(target= generate_transform_matrix, args=(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features))
                 #refined_h = generate_transform_matrix(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features)
-            thread_perspective_transform.start()
+                #thread_perspective_transform.start()
+            generate_transform_matrix(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features)
+            homographyMatrixUpdate(frame_num)
 
 
             copy_frame = frame.copy()
@@ -742,24 +790,24 @@ if __name__ == '__main__':
                     #cv2.waitKey(0)
 
                 # Visualize the results on the frame
-                #annotated_frame = results[0].plot()
-                out = cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 1)
-                t_size = cv2.getTextSize(str(confidence), 0, fontScale=1 / 2, thickness=1)[0]
-                out = cv2.rectangle(frame, (int(x1), int(y1) - t_size[1] - 3), (int(x1) + t_size[0], int(y1) + 3),
-                              color, -1)
-                out = cv2.putText(frame, nam + ": " + str(confidence), (int(x1), int(y1) - 4), 0, 1 / 2, [0, 0, 0], thickness=1,
-                            lineType=cv2.LINE_AA)
-                #out = cv2.circle(frame, (int(x1), int(y2)), 5, (0, 0, 255), -1)
-                #out = cv2.circle(frame, (int(x2), int(y2)), 5, (255, 255, 0), -1)
-
-
-                thread_perspective_transform.join()
                 if name != "Ball":
+                    #annotated_frame = results[0].plot()
+                    out = cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 1)
+                    t_size = cv2.getTextSize(str(confidence), 0, fontScale=1 / 2, thickness=1)[0]
+                    out = cv2.rectangle(frame, (int(x1), int(y1) - t_size[1] - 3), (int(x1) + t_size[0], int(y1) + 3),
+                                  color, -1)
+                    out = cv2.putText(frame, nam + ": " + str(confidence), (int(x1), int(y1) - 4), 0, 1 / 2, [0, 0, 0], thickness=1,
+                                lineType=cv2.LINE_AA)
+                    #out = cv2.circle(frame, (int(x1), int(y2)), 5, (0, 0, 255), -1)
+                    #out = cv2.circle(frame, (int(x2), int(y2)), 5, (255, 255, 0), -1)
+
+
+                    #thread_perspective_transform.join()
+                    #homographyMatrixUpdate(frame_num)
+
                     # prueba bird eye
-                    coord = transform_matrix(np.linalg.inv(refined_h), (x_center * (1280/1920), y_center * (720/1080)), (720, 1280), (gt_h, gt_w))
+                    coord = transform_matrix(actual_homography_matrix, (x_center * (1280/1920), y_center * (720/1080)), (720, 1280), (gt_h, gt_w))
                     #print(coord)
-                    if color == (0,0,0):
-                        color = (107,107,107)
                     cv2.circle(bg_img, coord, 3, color, -1)
                     # ----
 
@@ -785,23 +833,40 @@ if __name__ == '__main__':
                 if idx == 2:
                     #print("velocity prediction")
                     ballPos = (gaussPred[0], gaussPred[1])
-                    out = cv2.circle(frame, (gaussPred[0], gaussPred[1]), 10, (255, 255, 255), 4)
+                    #out = cv2.circle(frame, (gaussPred[0], gaussPred[1]), 10, (255, 255, 255), 4)
 
-                    coord = transform_matrix(np.linalg.inv(refined_h),
+                    coord = transform_matrix(actual_homography_matrix,
                                              (gaussPred[0] * (1280 / 1920), gaussPred[1] * (720 / 1080)), (720, 1280),
                                              (gt_h, gt_w))
                     # print(coord)
+
+                    out = cv2.rectangle(frame, (int(ballPos[0] - 10), int(ballPos[1] - 10)),
+                                        (int(ballPos[0] + 10), int(ballPos[1] + 10)), (255, 255, 255), 1)
+                    t_size = cv2.getTextSize(str(confidence), 0, fontScale=1 / 2, thickness=1)[0]
+                    out = cv2.rectangle(frame, (int(ballPos[0] - 10), int(ballPos[1] - 10) - t_size[1] - 3), (int(ballPos[0] - 10 + t_size[0]), int(ballPos[1] - 10) + 3) , (255, 255, 255), -1)
+                    out = cv2.putText(frame,"pelota: prediction",
+                                      (int(ballPos[0] - 10), int(ballPos[1] - 10) - 4), 0, 1 / 2, [0, 0, 0],
+                                      thickness=1,
+                                      lineType=cv2.LINE_AA)
                     cv2.circle(bg_img, coord, 3, (255, 255, 255), -1)
 
                 else:
                     #print("yolo or yolo gaussian")
                     ballPos = yoloBallPos
-                    coord = transform_matrix(np.linalg.inv(refined_h),
+                    coord = transform_matrix(actual_homography_matrix,
                                              (ballPos[0] * (1280 / 1920), ballPos[1] * (720 / 1080)), (720, 1280),
                                              (gt_h, gt_w))
-                    cv2.circle(bg_img, coord, 3, color, -1)
+
+                    out = cv2.rectangle(frame, (int(ballPos[0] - 10), int(ballPos[1] - 10)), (int(ballPos[0] + 10), int(ballPos[1] + 10)), (255, 255, 255), 1)
+                    t_size = cv2.getTextSize(str(confidence), 0, fontScale=1 / 2, thickness=1)[0]
+                    out = cv2.rectangle(frame, (int(ballPos[0] - 10), int(ballPos[1] - 10) - t_size[1] - 3), (int(ballPos[0] - 10 + t_size[0]), int(ballPos[1] - 10) + 3) , (255, 255, 255), -1)
+                    out = cv2.putText(frame, "pelota: " + str(yoloConfidence), (int(ballPos[0] - 10), int(ballPos[1] - 10) - 4), 0, 1 / 2, [0, 0, 0],
+                                      thickness=1,
+                                      lineType=cv2.LINE_AA)
+                    cv2.circle(bg_img, coord, 3, (255,255,255), -1)
 
                 update_possession_threshold(gt_h, coord[1])
+                pitch_side_aux(gt_w, coord[0])
                 update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
 
 
@@ -819,11 +884,21 @@ if __name__ == '__main__':
 
                 #print("yolo or yolo gaussian")
                 ballPos = yoloBallPos
-                coord = transform_matrix(np.linalg.inv(refined_h),
+                coord = transform_matrix(actual_homography_matrix,
                                          (ballPos[0] * (1280 / 1920), ballPos[1] * (720 / 1080)), (720, 1280),
                                          (gt_h, gt_w))
-                cv2.circle(bg_img, coord, 3, color, -1)
+
+                out = cv2.rectangle(frame, (int(ballPos[0] - 15), int(ballPos[1] - 15)),
+                                    (int(ballPos[0] + 15), int(ballPos[1] + 15)), (255, 255, 255), 1)
+                t_size = cv2.getTextSize(str(confidence), 0, fontScale=1 / 2, thickness=1)[0]
+                out = cv2.rectangle(frame, (int(ballPos[0] - 15), int(ballPos[1] - 10) - t_size[1] - 3), (int(ballPos[0] - 10 + t_size[0]), int(ballPos[1] - 10) + 3) , (255, 255, 255), -1)
+                out = cv2.putText(frame, "pelota: " + str(yoloConfidence), (int(ballPos[0] - 10), int(ballPos[1] - 10) - 4),
+                                  0, 1 / 2, [0, 0, 0],
+                                  thickness=1,
+                                  lineType=cv2.LINE_AA)
+                cv2.circle(bg_img, coord, 3, (255,255,255), -1)
                 update_possession_threshold(gt_h, ballPos[1])
+                pitch_side_aux(gt_w, coord[0])
                 update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
                 #print("probabilidad yolo = " + str(yoloConfidence))
                 yoloConfidence = 0
@@ -835,6 +910,8 @@ if __name__ == '__main__':
                 # Side of the pitch calculation
                 if middle_line is not None:
                     side = get_pitch_side(ballPos)
+                else:
+                    side = side_aux
 
                 if side is not None:
                     if side == 0:
@@ -876,10 +953,10 @@ if __name__ == '__main__':
 
             #out = cv2.putText(frame, "Equipo rojo" + ": " + str(100 * (possessions["Equipo rojo"] / (possessions["Equipo rojo"] + possessions["Equipo verde"]))) + "%", )
             if possessions[team1] != 0 or possessions[team2] != 0:
-                out = cv2.putText(frame, team1 + " = " + str(100 * (possessions[team1] / (possessions[team1] + possessions[team2]))) + "%", (60, 100+90), 0, 1 / 2, [0, 0, 0],
+                out = cv2.putText(frame, team1 + " = " + str(round(100 * (possessions[team1] / (possessions[team1] + possessions[team2])))) + "%", (60, 100+90), 0, 1 / 2, [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
-                out = cv2.putText(frame, team2 + " = " + str(100 * (possessions[team2] / (possessions[team1] + possessions[team2]))) + "%", (60, 115+90), 0, 1 / 2, [0, 0, 0],
+                out = cv2.putText(frame, team2 + " = " + str(round(100 * (possessions[team2] / (possessions[team1] + possessions[team2])))) + "%", (60, 115+90), 0, 1 / 2, [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
                 out = cv2.putText(frame,"Actual = " + str(teamInPossession), (60, 130+90), 0, 1 / 2,
@@ -889,12 +966,12 @@ if __name__ == '__main__':
 
             if side_time["left"] != 0 or side_time["right"] != 0:
                 out = cv2.putText(frame, "left = " + str(
-                    100 * (side_time["left"] / (side_time["left"] + side_time["right"]))) + "%", (60, 145+90), 0, 1 / 2,
+                    round(100 * (side_time["left"] / (side_time["left"] + side_time["right"])))) + "%", (60, 145+90), 0, 1 / 2,
                                   [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
                 out = cv2.putText(frame, "right = " + str(
-                    100 * (side_time["right"] / (side_time["left"] + side_time["right"]))) + "%", (60, 160+90), 0, 1 / 2,
+                    round(100 * (side_time["right"] / (side_time["left"] + side_time["right"])))) + "%", (60, 160+90), 0, 1 / 2,
                                   [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
@@ -918,9 +995,9 @@ if __name__ == '__main__':
                               [0, 0, 0],
                               thickness=2,
                               lineType=cv2.LINE_AA)
-            if possession_threshold == 10:
+            if possession_threshold == 15:
                 actual_third = "primer tercio"
-            elif possession_threshold == 25:
+            elif possession_threshold == 30:
                 actual_third = "segundo_tercio"
             else:
                 actual_third = "tercer tercio"
@@ -932,13 +1009,13 @@ if __name__ == '__main__':
                               lineType=cv2.LINE_AA)
 
             if possessions["primer tercio"] != 0 or possessions["segundo tercio"] != 0 or possessions["tercer tercio"] != 0:
-                out = cv2.putText(frame, "primer tercio = " + str(100 * (possessions["primer tercio"] / (possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"]))) + "%", (60, 250+90), 0, 1 / 2, [0, 0, 0],
+                out = cv2.putText(frame, "primer tercio = " + str(round(100 * (possessions["primer tercio"] / (possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"])))) + "%", (60, 250+90), 0, 1 / 2, [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
-                out = cv2.putText(frame, "segundo tercio = " + str(100 * (possessions["segundo tercio"] / (possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"]))) + "%", (60, 265+90), 0, 1 / 2, [0, 0, 0],
+                out = cv2.putText(frame, "segundo tercio = " + str(round(100 * (possessions["segundo tercio"] / (possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"])))) + "%", (60, 265+90), 0, 1 / 2, [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
-                out = cv2.putText(frame,"tercer tercio = " + str(100 * (possessions["tercer tercio"] / (possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"]))) + "%", (60, 280+90), 0, 1 / 2,
+                out = cv2.putText(frame,"tercer tercio = " + str(round(100 * (possessions["tercer tercio"] / (possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"])))) + "%", (60, 280+90), 0, 1 / 2,
                                   [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
@@ -958,40 +1035,40 @@ if __name__ == '__main__':
 
             bg_img = cv2.line(bg_img, (0, (gt_h //3) - 7), (gt_w, (gt_h //3) - 7), (0,0,255), 1)
             bg_img = cv2.line(bg_img, (0, ((gt_h // 3) * 2) + 7), (gt_w, ((gt_h // 3) * 2) + 7), (0, 0, 255), 1)
-            #cv2.imshow('Bird eye', bg_img)
-            #cv2.imshow("YOLOv8 detection", out)
+            if not save:
+                cv2.imshow('Bird eye', bg_img)
+                cv2.imshow("YOLOv8 detection", out)
 
-            # prints debug -------------------------------
+                # prints debug -------------------------------
 
-            ## Warp source image to destination based on homography
-            #im_out = cv2.warpPerspective(seg_map, np.linalg.inv(refined_h), (115, 74), borderMode=cv2.BORDER_CONSTANT)
+                ## Warp source image to destination based on homography
+                #im_out = cv2.warpPerspective(seg_map, np.linalg.inv(refined_h), (115, 74), borderMode=cv2.BORDER_CONSTANT)
 
-            # frame2 = cv2.resize(frame2, (1280, 720), interpolation=cv2.INTER_CUBIC)
+                # frame2 = cv2.resize(frame2, (1280, 720), interpolation=cv2.INTER_CUBIC)
 
-            #model_address = current_directory + "/model.jpg"
-            #model_image = cv2.imread(model_address)
-            #model_image = cv2.resize(model_image, (115, 74))
+                #model_address = current_directory + "/model.jpg"
+                #model_image = cv2.imread(model_address)
+                #model_image = cv2.resize(model_image, (115, 74))
 
-            #new_image = cv2.addWeighted(model_image, 1, im_out, 1, 0)
+                #new_image = cv2.addWeighted(model_image, 1, im_out, 1, 0)
 
-            #new_image = cv2.resize(new_image, (460, 296), interpolation=1)
+                #new_image = cv2.resize(new_image, (460, 296), interpolation=1)
 
-            # Display images
-            # cv2.imshow('frame', frame)
-            # cv2.waitKey()
-            # cv.imshow('overlayed image', im_out_2)
-            # cv.waitKey()
-            #cv2.imshow('Edge image of retrieved camera', retrieved_image)
-            #cv2.imshow("NN",edge_map)
-            #cv2.imshow("Warped Source Image", new_image)
-            #cv2.waitKey(0)
+                # Display images
+                # cv2.imshow('frame', frame)
+                # cv2.waitKey()
+                # cv.imshow('overlayed image', im_out_2)
+                # cv.waitKey()
+                cv2.imshow('Edge image of retrieved camera', retrieved_image)
+                cv2.imshow("NN",edge_map)
+                #cv2.imshow("Warped Source Image", new_image)
+                cv2.waitKey(0)
 
-            # ---------------------------------
-
-            outVideo.write(out)
-            outBird.write(bg_img)
+                # ---------------------------------
+            else:
+                outVideo.write(out)
+                outBird.write(bg_img)
             print(frame_num)
-            #outVideo.write(out)
 
             if not metrics:
                 # waiting using waitKey method
@@ -1028,9 +1105,11 @@ if __name__ == '__main__':
 
     # Release the video capture object and close the display window
     cap.release()
-    outVideo.release()
-    outBird.release()
-    #cv2.destroyAllWindows()
+    if save:
+        outVideo.release()
+        outBird.release()
+    else:
+        cv2.destroyAllWindows()
 
     if metrics:
         data = [['CLIP NAME', clip_name], ['YOLO GOOD DETECTION', frameMetrics.count("z")], ['YOLO BAD DETECTION', frameMetrics.count("x")], ['KALMAN GOOD DETECTION', frameMetrics.count("c")],
@@ -1048,11 +1127,11 @@ if __name__ == '__main__':
     # Cargar las imágenes de los escudos
     img_escudo_team1 = Image.open(ruta_escudo_team1)
     img_escudo_team2 = Image.open(ruta_escudo_team2)
-    gt_img = cv2.imread('inference/black.jpg')
+    gt_img = cv2.imread('inference/green.jpg')
     gt_h, gt_w, _ = gt_img.shape
     bg_img = gt_img.copy()
-    bg_img = cv2.line(bg_img, (0, (gt_h // 3) - 7), (gt_w, (gt_h // 3) - 7), (0, 0, 255), 12)
-    bg_img = cv2.line(bg_img, (0, ((gt_h // 3) * 2) + 7), (gt_w, ((gt_h // 3) * 2) + 7), (0, 0, 255), 12)
+    bg_img = cv2.line(bg_img, (0, (gt_h // 3) - 7), (gt_w, (gt_h // 3) - 7), (0, 0, 0), 12)
+    bg_img = cv2.line(bg_img, (0, ((gt_h // 3) * 2) + 7), (gt_w, ((gt_h // 3) * 2) + 7), (0, 0, 0), 12)
 
     # Crear los subplots
     fig, axs = plt.subplots(4, 1, figsize=(15, 5))
