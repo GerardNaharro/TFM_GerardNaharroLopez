@@ -89,32 +89,6 @@ def load_masks(df, team1, team2):
     # eval converts from string to tuple
     return eval(team1_home_hsv), eval(team1_away_hsv), eval(team2_home_hsv), eval(team2_away_hsv), eval(team1_gk_home_hsv), eval(team1_gk_away_hsv), eval(team2_gk_home_hsv), eval(team2_gk_away_hsv)
 
-# !!!    MEJORAR FUNCION     !!!
-
-
-def get_team(img, masks):
-
-    lower_team1, upper_team1, lower_team2, upper_team2 = masks
-
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-    team1_mask = cv2.inRange(hsv, lower_team1, upper_team1)
-    team2_mask = cv2.inRange(hsv, lower_team2, upper_team2)
-
-    out_team1 = cv2.bitwise_and(img, img, mask=team1_mask)
-    out_team2 = cv2.bitwise_and(img, img, mask=team2_mask)
-
-    count1 = np.sum(out_team1 != 0)
-    count2 = np.sum(out_team2 != 0)
-
-    if count1 < count2:
-        color = (0,255,0)
-        team = "Verdes"
-    else:
-        color = (0,0,255)
-        team = "Rojos"
-
-    return team, color
 
 
 def get_team_improved(img, team1_home_hsv,team1_away_hsv, team2_home_hsv, team2_away_hsv, team1_gk_home_hsv, team1_gk_away_hsv, team2_gk_home_hsv, team2_gk_away_hsv):
@@ -249,37 +223,32 @@ def line_filtering(frame, temp_frame):
     found = False
     kernel = np.ones((3, 3), np.uint8)
     filtered = cv2.bitwise_and(temp_frame, temp_frame,
-                               mask=cv2.inRange(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2HSV), field_color1,
-                                                field_color2))
+                               mask=cv2.inRange(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2HSV), field_color1,field_color2))
     edges = cv2.Canny(filtered, 25, 150)
-    '''cv2.imshow("filtrada", filtered)
-    cv2.imshow("cany",edges)'''
     img_dilation = cv2.dilate(edges, kernel, iterations=1)
-    '''cv2.imshow("dilatada", img_dilation)'''
     minLineLength = 240
-    maxLineGap = 25
+    maxLineGap = 20
     lines = cv2.HoughLinesP(img_dilation, rho=1, theta=np.pi / 180, threshold=10, minLineLength=minLineLength,
                             maxLineGap=maxLineGap)
     supp_line = [0, 0, 0, 0]
     if lines is not None:
         for line in lines:
-            '''color = list(np.random.choice(range(256), size=3))
-            color = (int(color[0]), int(color[1]), int(color[2]))'''
+
             x1, y1, x2, y2 = line[0]
             slope = (y2 - y1) / (x2 - x1)
             angle = np.math.atan(slope) * 180. / np.pi
             size = np.abs(y1 - y2)
             if 85 <= angle <= 95 or -85 >= angle >= -95:
                 found = True
-                'cv2.line(temp_frame,(x1,y1),(x2,y2), color, 2)'
                 if size > np.abs(supp_line[1] - supp_line[3]):
                     supp_line = line[0]
-        'cv2.imshow("palo centro", temp_frame)'
         if found:
             x1, y1, x2, y2 = supp_line
             middle_line = (x1, x2)
             #print(middle_line)
-            draw_line_between_points(1080, 1920, (x1, y1), (x2, y2), frame, (0, 255, 0))
+
+            #draw_line_between_points(1080, 1920, (x1, y1), (x2, y2), frame, (0, 255, 0))
+            #cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 255), thickness=3)
         else:
             middle_line = None
     else:
@@ -542,9 +511,9 @@ def pitch_side_aux(width, ballXtransformed):
     global side_aux
 
     if ballXtransformed < (width // 2):
-        side_aux = "left"
+        side_aux = 0
     else:
-        side_aux = "right"
+        side_aux = 1
 
 
 def eliminar_regiones_pequenas(imagen_binaria, umbral_area = 6000):
@@ -609,7 +578,7 @@ if __name__ == '__main__':
     model = YOLO(own_trained_location)
     #persepctive_transform = Perspective_Transform()
 
-    clip_name = '/RMAvsATM.mp4'
+    clip_name = '/BMUvsBLV.mp4'
 
 
     # Define path to video file
@@ -660,8 +629,8 @@ if __name__ == '__main__':
                                    #cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 1, (1280, 720))
 
     if save:
-        outVideo = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"_yoloedALL_PRUEBADESCARTES_02.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (1920,1080))
-        outBird = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"_BirdViewALL_PRUEBADESCARTES_02.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (gt_w, gt_h))
+        outVideo = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"_yoloedTFM.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (1920,1080))
+        outBird = cv2.VideoWriter(current_directory + clip_name[1:-4] + r"_birdviewTFM.avi",cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 15, (gt_w, gt_h))
 
     abbr1, abbr2 = get_abbr(clip_name)
     team1, team2 = get_names(df, abbr1, abbr2)
@@ -672,10 +641,10 @@ if __name__ == '__main__':
     possessions["primer tercio"] = 0
     possessions["segundo tercio"] = 0
     possessions["tercer tercio"] = 0
-    passes[team1] = 0
+    '''passes[team1] = 0
     passes[team2] = 0
     missed_passes[team1] = 0
-    missed_passes[team2] = 0
+    missed_passes[team2] = 0'''
     side_time["left"] = 0
     side_time["right"] = 0
 
@@ -704,15 +673,13 @@ if __name__ == '__main__':
             if cap.get(3) != 1280.0 or cap.get(4) != 720.0:
                 frame2 = cv2.resize(frame, (1280, 720))  # ===> for videos which resolutions are greater
 
-            #frame2 = cv2.bitwise_and(frame2, frame2,mask=cv2.inRange(cv2.cvtColor(frame2, cv2.COLOR_BGR2HSV), field_color1,field_color2))
-            #frame2 = cv2.dilate(frame2, np.ones((1, 1), np.uint8), iterations=2)
 
-            #if frame_num % 3 == 0:
+            if frame_num % 5 == 0:
                 #thread_perspective_transform = threading.Thread(target= generate_transform_matrix, args=(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features))
                 #refined_h = generate_transform_matrix(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features)
                 #thread_perspective_transform.start()
-            generate_transform_matrix(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features)
-            homographyMatrixUpdate(frame_num)
+                generate_transform_matrix(frame2, twoGanModel, data_transform, device, current_directory, template_h, template_w, database_features)
+                homographyMatrixUpdate(frame_num)
 
 
             copy_frame = frame.copy()
@@ -777,11 +744,10 @@ if __name__ == '__main__':
                     h, w, _ = crop.shape
                     cropped_player = crop[int(0.2*h): int(0.7*h), int(0.3*w): int(0.7*w)]
 
-                    #cropped_player = frame[int(y1): int(y2), int(x1): int(x2)]
-                    #cv2.imshow("Cropped", cropped_player)
                     #nam, color = get_team(cropped_player, (red_mask_lower, red_mask_upper, green_mask_lower, green_mask_upper))
                     nam, color = get_team_improved(cropped_player,
                                           team1_home_hsv, team1_away_hsv, team2_home_hsv, team2_away_hsv, team1_gk_home_hsv, team1_gk_away_hsv, team2_gk_home_hsv, team2_gk_away_hsv)
+
 
                     # Yolo, sometimes, makes wrong classifications, saying that a referee is a player
                     if nam != "Arbitro":
@@ -870,11 +836,10 @@ if __name__ == '__main__':
                 update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
 
 
-                #print("probabilidad yolo = " + str(yoloConfidence))
-                #print("probabilidad gaussiana = " + str(pt))
+
 
                 yoloConfidence = 0
-            elif yoloBallPos is not None:  #esto antes era un else, comprobar funcionamiento (cambio de else a elif por PSGvsBVB, en el primer frame no hay pelota)
+            elif yoloBallPos is not None:
                 previousBallPos = ballPos
 
                 if len(xPos) == 5:
@@ -900,7 +865,6 @@ if __name__ == '__main__':
                 update_possession_threshold(gt_h, ballPos[1])
                 pitch_side_aux(gt_w, coord[0])
                 update_XYpos(xPos, yPos, ballPos[0], ballPos[1])
-                #print("probabilidad yolo = " + str(yoloConfidence))
                 yoloConfidence = 0
 
             if ballPos is not None:
@@ -916,27 +880,28 @@ if __name__ == '__main__':
                 if side is not None:
                     if side == 0:
                         side_time["left"] += 1
-                        out = cv2.putText(frame, "Actual = LEFT", (900, 500), 0, 1 / 2,
+                        '''out = cv2.putText(frame, "Actual = LEFT", (900, 500), 0, 1 / 2,
                                           [255, 0, 255],
                                           thickness=2,
-                                          lineType=cv2.LINE_AA)
+                                          lineType=cv2.LINE_AA)'''
                     else:
                         side_time["right"] += 1
-                        out = cv2.putText(frame, "Actual = RIGHT", (900, 500), 0, 1 / 2,
+                        '''out = cv2.putText(frame, "Actual = RIGHT", (900, 500), 0, 1 / 2,
                                           [255, 0, 255],
                                           thickness=2,
-                                          lineType=cv2.LINE_AA)
+                                          lineType=cv2.LINE_AA)'''
 
 
-                # Possession and passes calculations
+                # Possession calculations
                 possessions[zone] += 1
                 temp, dist = getPossessionTeam(players,ballPos)
-                #print("pusasio actual: " + str(temp))
-                #print("distansia actual: " + str(dist))
 
-                if temp is None and teamInPossession is not None:
+                teamInPossession = temp
+                if teamInPossession is not None:
+                    possessions[teamInPossession] += 1
+
+                '''if temp is None and teamInPossession is not None:
                     lastTeamInPossession = teamInPossession
-                    #print("ara mateix no hi ha pusasió")
 
                 teamInPossession = temp
                 if teamInPossession is not None:
@@ -948,11 +913,10 @@ if __name__ == '__main__':
                     elif lastTeamInPossession is not None and lastTeamInPossession != teamInPossession:
                         missed_passes[lastTeamInPossession] += 1
                         lastTeamInPossession = None
-                        #print("aquest no es va criar a la masia, mal pase noi")
+                        #print("aquest no es va criar a la masia, mal pase noi")'''
 
 
-            #out = cv2.putText(frame, "Equipo rojo" + ": " + str(100 * (possessions["Equipo rojo"] / (possessions["Equipo rojo"] + possessions["Equipo verde"]))) + "%", )
-            if possessions[team1] != 0 or possessions[team2] != 0:
+            '''if possessions[team1] != 0 or possessions[team2] != 0:
                 out = cv2.putText(frame, team1 + " = " + str(round(100 * (possessions[team1] / (possessions[team1] + possessions[team2])))) + "%", (60, 100+90), 0, 1 / 2, [0, 0, 0],
                                   thickness=2,
                                   lineType=cv2.LINE_AA)
@@ -962,9 +926,9 @@ if __name__ == '__main__':
                 out = cv2.putText(frame,"Actual = " + str(teamInPossession), (60, 130+90), 0, 1 / 2,
                                   [0, 0, 0],
                                   thickness=2,
-                                  lineType=cv2.LINE_AA)
+                                  lineType=cv2.LINE_AA)'''
 
-            if side_time["left"] != 0 or side_time["right"] != 0:
+            '''if side_time["left"] != 0 or side_time["right"] != 0:
                 out = cv2.putText(frame, "left = " + str(
                     round(100 * (side_time["left"] / (side_time["left"] + side_time["right"])))) + "%", (60, 145+90), 0, 1 / 2,
                                   [0, 0, 0],
@@ -974,27 +938,8 @@ if __name__ == '__main__':
                     round(100 * (side_time["right"] / (side_time["left"] + side_time["right"])))) + "%", (60, 160+90), 0, 1 / 2,
                                   [0, 0, 0],
                                   thickness=2,
-                                  lineType=cv2.LINE_AA)
+                                  lineType=cv2.LINE_AA)'''
 
-            out = cv2.putText(frame, "pases " + team1 + "= " + str(passes[team1]), (60, 175 + 90), 0, 1 / 2,
-                              [0, 0, 0],
-                              thickness=2,
-                              lineType=cv2.LINE_AA)
-
-            out = cv2.putText(frame, "pases " + team2 + "= " + str(passes[team2]), (60, 190 + 90), 0, 1 / 2,
-                              [0, 0, 0],
-                              thickness=2,
-                              lineType=cv2.LINE_AA)
-
-            out = cv2.putText(frame, "pases fallados " + team1 + "= " + str(missed_passes[team1]), (60, 205 + 90), 0, 1 / 2,
-                              [0, 0, 0],
-                              thickness=2,
-                              lineType=cv2.LINE_AA)
-
-            out = cv2.putText(frame, "pases fallados " + team2 + "= " + str(missed_passes[team2]), (60, 220 + 90), 0, 1 / 2,
-                              [0, 0, 0],
-                              thickness=2,
-                              lineType=cv2.LINE_AA)
             if possession_threshold == 15:
                 actual_third = "primer tercio"
             elif possession_threshold == 30:
@@ -1002,7 +947,7 @@ if __name__ == '__main__':
             else:
                 actual_third = "tercer tercio"
 
-            out = cv2.putText(frame, actual_third, (60, 235 + 90), 0,
+            '''out = cv2.putText(frame, actual_third, (60, 235 + 90), 0,
                               1 / 2,
                               [255, 0, 255],
                               thickness=1,
@@ -1018,7 +963,7 @@ if __name__ == '__main__':
                 out = cv2.putText(frame,"tercer tercio = " + str(round(100 * (possessions["tercer tercio"] / (possessions["primer tercio"] + possessions["segundo tercio"] + possessions["tercer tercio"])))) + "%", (60, 280+90), 0, 1 / 2,
                                   [0, 0, 0],
                                   thickness=2,
-                                  lineType=cv2.LINE_AA)
+                                  lineType=cv2.LINE_AA)'''
 
 
             #print("Pusesió")
@@ -1059,8 +1004,8 @@ if __name__ == '__main__':
                 # cv2.waitKey()
                 # cv.imshow('overlayed image', im_out_2)
                 # cv.waitKey()
-                cv2.imshow('Edge image of retrieved camera', retrieved_image)
-                cv2.imshow("NN",edge_map)
+                #cv2.imshow('Edge image of retrieved camera', retrieved_image)
+                #cv2.imshow("NN",edge_map)
                 #cv2.imshow("Warped Source Image", new_image)
                 cv2.waitKey(0)
 
