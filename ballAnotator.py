@@ -27,7 +27,7 @@ if __name__ == "__main__":
     groundTruth = []
     HOME = os.getcwd()
     clips = "D:\clips_futbol\listos"
-    clip_name = '/BVBvsPSG.mp4'
+    clip_name = '/BMUvsBLV.mp4'
     # Define path to video file
     video_path = clips + clip_name
 

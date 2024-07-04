@@ -30,7 +30,7 @@ if __name__ == '__main__':
     # Load the own trained model
     model = YOLO(own_trained_location)
 
-    clip_name = '/RMAvsSEV.mp4'
+    clip_name = '/BVBvsPSG.mp4'
 
     # Define path to video file
     video_path = clips + clip_name
@@ -46,7 +46,7 @@ if __name__ == '__main__':
 
 
     m = np.arange(22, 35, 0.1)
-    n = np.arange(0.45, 0.55, 0.025)
+    n = np.arange(0.48, 0.52, 0.005)
     num_iter = 0
 
     data = [['CLIP NAME', clip_name]]
@@ -237,5 +237,5 @@ if __name__ == '__main__':
     # Creates DataFrame.
     df = pd.DataFrame(data)
     # saving the dataframe
-    name = clip_name[1:-4] + '_newGaussianParametersACOTADOS' + '.csv'
+    name = clip_name[1:-4] + '_newGaussianParametersACOTADOS_MUYACOTADOS' + '.csv'
     df.to_csv(name)

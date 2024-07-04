@@ -34,7 +34,7 @@ import threading
 
 
 metrics = False
-save = False
+save = True
 possession_threshold = 40
 possessions = {}
 passes = {}
@@ -578,7 +578,7 @@ if __name__ == '__main__':
     model = YOLO(own_trained_location)
     #persepctive_transform = Perspective_Transform()
 
-    clip_name = '/BMUvsBLV.mp4'
+    clip_name = '/RMAvsSEV.mp4'
 
 
     # Define path to video file
